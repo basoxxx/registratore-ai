@@ -41,30 +41,7 @@ class Transcriber(
 ) {
     companion object {
         private const val TAG = "Transcriber"
-        private const val MAX_CHUNK = SAMPLE_RATE * 29          // whisper elabora al massimo 30 s
-        private const val MIN_CHUNK = SAMPLE_RATE * 22          // cerca una pausa tra 22 e 29 s
-        private const val MIN_TAIL = SAMPLE_RATE / 2            // ignora code < 0,5 s
-        private const val SILENCE_RMS = 0.0025f                 // blocchi silenziosi: niente whisper (evita "allucinazioni")
         private const val PROMPT_CHARS = 200
-
-        /**
-         * Sceglie il prossimo blocco da trascrivere a partire da [offsetMs]:
-         * blocchi pieni da ~22-29 s tagliati nel punto più silenzioso; la coda finale
-         * solo quando la registrazione è terminata.
-         */
-        fun nextChunk(reader: WavReader, offsetMs: Long, live: Boolean): Chunk {
-            val start = msToSamples(offsetMs)
-            val remaining = reader.availableSamples() - start
-            return when {
-                remaining >= MAX_CHUNK -> {
-                    val x = reader.readFloats(start, MAX_CHUNK)
-                    Chunk.Audio(x.copyOf(AudioMath.quietestCut(x, MIN_CHUNK, x.size)))
-                }
-                live -> Chunk.Wait
-                remaining > MIN_TAIL -> Chunk.Audio(reader.readFloats(start, remaining.toInt()))
-                else -> Chunk.End
-            }
-        }
     }
 
     suspend fun run(id: Long) = withContext(Dispatchers.Default) {
@@ -105,10 +82,10 @@ class Transcriber(
                 while (true) {
                     coroutineContext.ensureActive()
                     val live = ServiceState.recording.value?.recordingId == id
-                    val samples = when (val next = nextChunk(reader, offsetMs, live)) {
-                        is Chunk.Audio -> next.samples
-                        Chunk.End -> break
-                        Chunk.Wait -> {
+                    val samples = when (val next = Chunker.nextChunk(reader, offsetMs, live)) {
+                        is Chunker.Chunk.Audio -> next.samples
+                        Chunker.Chunk.End -> break
+                        Chunker.Chunk.Wait -> {
                             // In registrazione: aspettiamo che arrivi abbastanza audio.
                             publish(id, offsetMs, samplesToMs(reader.availableSamples()), true)
                             delay(2_000)
@@ -119,7 +96,7 @@ class Transcriber(
 
                     val chunkStartMs = offsetMs
                     val chunkLenMs = samplesToMs(samples.size.toLong())
-                    if (AudioMath.rms(samples) > SILENCE_RMS) {
+                    if (AudioMath.rms(samples) > Chunker.SILENCE_RMS) {
                         val prompt = listOf(rec.course.takeIf { it.isNotBlank() }, promptTail.takeIf { it.isNotBlank() })
                             .filterNotNull().joinToString(". ")
                         val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads)
@@ -158,12 +135,6 @@ class Transcriber(
         }
     }
 
-    sealed interface Chunk {
-        class Audio(val samples: FloatArray) : Chunk
-        data object Wait : Chunk
-        data object End : Chunk
-    }
-
     private fun publish(id: Long, processed: Long, total: Long, live: Boolean) {
         ServiceState.transcription.value = TxProgress(id, processed, total, live)
     }
@@ -179,27 +150,5 @@ class Transcriber(
         } catch (e: Exception) {
             Log.w(TAG, "Compressione fallita", e)
         }
-    }
-}
-
-/** Pulizia del testo e filtro delle tipiche "allucinazioni" di Whisper sul silenzio. */
-object TextCleaner {
-    private val hallucinations = listOf(
-        Regex("sottotitoli", RegexOption.IGNORE_CASE) to Regex("amara|qtss|a cura di|creati|realizzati|revisione", RegexOption.IGNORE_CASE),
-        Regex("grazie (a tutti )?per (la|l'|aver) (visione|guardato|ascoltato)", RegexOption.IGNORE_CASE) to null,
-        Regex("iscriviti al canale|iscrivetevi al canale", RegexOption.IGNORE_CASE) to null,
-        Regex("thank(s| you) for watching|subtitles by|amara\\.org", RegexOption.IGNORE_CASE) to null,
-    )
-
-    fun clean(raw: String): String? {
-        val t = raw.trim().replace(Regex("\\s+"), " ")
-        if (t.isEmpty()) return null
-        // Solo annotazioni tipo "[Musica]", "(applausi)", "*rumore*"
-        if (Regex("^[\\[(*♪].*[\\])*♪]$").matches(t)) return null
-        if (!t.any { it.isLetterOrDigit() }) return null
-        for ((a, b) in hallucinations) {
-            if (a.containsMatchIn(t) && (b == null || b.containsMatchIn(t))) return null
-        }
-        return t
     }
 }

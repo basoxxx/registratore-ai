@@ -71,13 +71,13 @@ import it.registratoreai.app
 import it.registratoreai.data.RecState
 import it.registratoreai.data.Recording
 import it.registratoreai.data.TxState
-import it.registratoreai.export.ExportFormat
+import it.registratoreai.text.ExportFormat
 import it.registratoreai.service.CaptureService
 import it.registratoreai.service.ServiceState
 import it.registratoreai.transcription.modelById
-import it.registratoreai.ui.formatDate
-import it.registratoreai.ui.formatDuration
-import it.registratoreai.ui.formatTimestamp
+import it.registratoreai.text.formatDate
+import it.registratoreai.text.formatDuration
+import it.registratoreai.text.formatTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch

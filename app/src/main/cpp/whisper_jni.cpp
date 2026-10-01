@@ -1,6 +1,13 @@
-// Ponte JNI minimale verso whisper.cpp.
+// Ponte JNI minimale verso whisper.cpp (usato sia dall'app Android sia dalla versione desktop).
 #include <jni.h>
+#ifdef __ANDROID__
 #include <android/log.h>
+#else
+#include <cstdio>
+#define ANDROID_LOG_INFO 4
+#define ANDROID_LOG_ERROR 6
+#define __android_log_print(prio, tag, ...) (fprintf(stderr, "[%s] ", tag), fprintf(stderr, __VA_ARGS__), fprintf(stderr, "\n"))
+#endif
 #include <atomic>
 #include <cstring>
 #include <string>
@@ -21,7 +28,11 @@ JNIEXPORT jlong JNICALL
 Java_it_registratoreai_transcription_WhisperLib_initContext(JNIEnv *env, jobject, jstring modelPath) {
     const char *path = env->GetStringUTFChars(modelPath, nullptr);
     whisper_context_params cparams = whisper_context_default_params();
+#if defined(__APPLE__) && !defined(__ANDROID__)
+    cparams.use_gpu = true;   // Metal sui Mac
+#else
     cparams.use_gpu = false;
+#endif
     whisper_context *ctx = whisper_init_from_file_with_params(path, cparams);
     if (!ctx) LOGE("Impossibile caricare il modello %s", path);
     env->ReleaseStringUTFChars(modelPath, path);

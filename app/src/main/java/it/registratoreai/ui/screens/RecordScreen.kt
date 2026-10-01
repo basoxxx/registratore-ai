@@ -49,8 +49,8 @@ import it.registratoreai.data.Recording
 import it.registratoreai.data.Segment
 import it.registratoreai.service.CaptureService
 import it.registratoreai.service.ServiceState
-import it.registratoreai.ui.formatDuration
-import it.registratoreai.ui.formatTimestamp
+import it.registratoreai.text.formatDuration
+import it.registratoreai.text.formatTimestamp
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 

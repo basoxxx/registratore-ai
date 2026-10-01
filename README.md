@@ -1,7 +1,7 @@
 # Registratore Lezioni 🎙️📝
 
-App Android per **registrare le lezioni universitarie** e **trascriverle automaticamente
-sul telefono, offline**, con esportazione in **Markdown** e testo.
+App per **Android, macOS e Windows** per **registrare le lezioni universitarie** e
+**trascriverle automaticamente sul dispositivo, offline**, con esportazione in **Markdown** e testo.
 
 ## Cosa fa
 
@@ -38,6 +38,20 @@ Sito: **https://basoxxx.github.io/registratore-ai/**
 
 Requisiti: Android 8.0+, telefono a 64 bit (arm64).
 
+### Versione per computer
+
+Dalla stessa pagina Releases:
+
+- **macOS** (Apple Silicon M1 e successivi): `RegistratoreLezioni-macOS.dmg`. Trascina l'app in
+  Applicazioni. Non è firmata da Apple: al primo avvio, se viene bloccata, vai in
+  *Impostazioni di Sistema → Privacy e sicurezza → Apri comunque*. Usa la GPU (Metal).
+- **Windows 10/11** a 64 bit: `RegistratoreLezioni-Windows.msi` (installazione per utente).
+  Se compare SmartScreen: *Ulteriori informazioni → Esegui comunque*.
+
+Le lezioni vengono salvate in `Documenti/Registratore Lezioni`, una cartella per lezione con
+`audio.wav`, `lezione.json` e il file `.md` sempre aggiornato durante la trascrizione.
+Sul computer si possono importare file WAV/AIFF.
+
 ## Quale modello scegliere
 
 | Modello | Dimensione | Uso consigliato |
@@ -60,9 +74,21 @@ git clone --recursive https://github.com/basoxxx/registratore-ai.git
 ./gradlew testDebugUnitTest
 ```
 
+Versione desktop (serve CMake e un compilatore C++):
+
+```bash
+cmake -S desktop/native -B build-native -DCMAKE_BUILD_TYPE=Release
+cmake --build build-native --config Release
+mkdir -p desktop/resources/<os>-<arch>   # es. macos-arm64, windows-x64, linux-x64
+cp build-native/<libwhisper_jni.*> desktop/resources/<os>-<arch>/
+SKIP_ANDROID=1 ./gradlew :desktop:run
+```
+
 Struttura:
 
-- `app/src/main/cpp/` – ponte JNI verso whisper.cpp (`third_party/whisper.cpp`, submodule)
+- `core/` – codice condiviso (WAV, suddivisione in blocchi, modelli, Markdown, binding JNI) + test
+- `desktop/` – app Compose Desktop per macOS/Windows (`desktop/native/` compila la libreria nativa)
+- `app/src/main/cpp/` – ponte JNI verso whisper.cpp (`third_party/whisper.cpp`, submodule), usato anche dal desktop
 - `service/CaptureService.kt` – servizio in primo piano: registrazione + coda di trascrizione
 - `transcription/Transcriber.kt` – trascrizione a blocchi, in tempo reale o differita, riprendibile
 - `audio/` – WAV robusto, conversioni (import e compressione) con MediaCodec
@@ -72,8 +98,8 @@ Struttura:
 
 ### Release e firma
 
-Ogni push su `main` esegue i test, compila l'APK e pubblica la release `v1.0.<N>` che l'app
-usa per aggiornarsi. Gli aggiornamenti funzionano solo se ogni APK ha la **stessa firma**:
+Ogni push su `main` esegue i test, compila APK, `.dmg` e `.msi` e pubblica la release
+`v1.0.<N>` che le app usano per aggiornarsi. Gli aggiornamenti funzionano solo se ogni APK ha la **stessa firma**:
 di default si usa `keystore/registratore.keystore` incluso nel repository. Per una firma privata
 crea i secret `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`
 (cambiando firma bisogna disinstallare e reinstallare l'app una volta).

@@ -13,4 +13,7 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "RegistratoreAI"
-include(":app")
+include(":core")
+// Le build desktop (macOS/Windows) possono saltare il modulo Android
+if (System.getenv("SKIP_ANDROID") == null) include(":app")
+include(":desktop")

@@ -1,9 +1,19 @@
 package it.registratoreai.transcription
 
+/**
+ * Su desktop la libreria nativa viene caricata con System.load() dalla cartella dell'app
+ * prima del primo utilizzo (vedi desktop/Native.kt); su Android basta loadLibrary.
+ * (Oggetto separato: accedere a WhisperLib ne avvierebbe subito l'inizializzazione.)
+ */
+object WhisperNative {
+    @Volatile
+    var preloaded = false
+}
+
 /** Binding JNI verso whisper.cpp (vedi app/src/main/cpp/whisper_jni.cpp). */
 object WhisperLib {
     init {
-        System.loadLibrary("whisper_jni")
+        if (!WhisperNative.preloaded) System.loadLibrary("whisper_jni")
     }
 
     external fun initContext(modelPath: String): Long

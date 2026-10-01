@@ -30,7 +30,7 @@ import it.registratoreai.audio.samplesToMs
 import it.registratoreai.data.RecState
 import it.registratoreai.data.Recording
 import it.registratoreai.data.TxState
-import it.registratoreai.ui.formatDuration
+import it.registratoreai.text.formatDuration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

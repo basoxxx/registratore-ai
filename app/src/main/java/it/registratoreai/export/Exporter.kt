@@ -11,65 +11,32 @@ import it.registratoreai.data.RecordingDao
 import it.registratoreai.data.Segment
 import it.registratoreai.data.Settings
 import it.registratoreai.data.TxState
+import it.registratoreai.text.ExportFormat
+import it.registratoreai.text.LessonInfo
+import it.registratoreai.text.TextSegment
+import it.registratoreai.text.TranscriptFormatter
 import it.registratoreai.transcription.modelById
-import it.registratoreai.ui.formatDate
-import it.registratoreai.ui.formatDuration
-import it.registratoreai.ui.formatTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-
-enum class ExportFormat(val ext: String, val mime: String) {
-    MARKDOWN("md", "text/markdown"),
-    TEXT("txt", "text/plain"),
-}
 
 class Exporter(
     private val context: Context,
     private val dao: RecordingDao,
     private val settings: Settings,
 ) {
-    fun build(rec: Recording, segments: List<Segment>, format: ExportFormat, timestamps: Boolean = settings.current.includeTimestamps): String {
-        val paras = paragraphs(segments)
-        val sb = StringBuilder()
-        val partial = rec.transcription != TxState.DONE
-        when (format) {
-            ExportFormat.MARKDOWN -> {
-                sb.append("# ").append(rec.title).append("\n\n")
-                sb.append("- **Data:** ").append(formatDate(rec.createdAt)).append('\n')
-                if (rec.course.isNotBlank()) sb.append("- **Corso:** ").append(rec.course).append('\n')
-                sb.append("- **Durata:** ").append(formatDuration(rec.durationMs)).append('\n')
-                if (rec.modelId.isNotBlank()) sb.append("- **Trascrizione:** Whisper ").append(modelById(rec.modelId).name).append(" (offline)\n")
-                if (partial) sb.append("- **Stato:** trascrizione in corso, aggiornata a ")
-                    .append(formatTimestamp(rec.transcribedUntilMs)).append('\n')
-                sb.append("\n---\n\n")
-                for (p in paras) {
-                    if (timestamps) sb.append("**[").append(formatTimestamp(p.startMs)).append("]** ")
-                    sb.append(p.text).append("\n\n")
-                }
-            }
-            ExportFormat.TEXT -> {
-                sb.append(rec.title).append('\n')
-                sb.append(formatDate(rec.createdAt))
-                if (rec.course.isNotBlank()) sb.append(" - ").append(rec.course)
-                sb.append(" - ").append(formatDuration(rec.durationMs)).append("\n\n")
-                for (p in paras) {
-                    if (timestamps) sb.append('[').append(formatTimestamp(p.startMs)).append("] ")
-                    sb.append(p.text).append("\n\n")
-                }
-            }
-        }
-        return sb.toString()
-    }
+    fun build(rec: Recording, segments: List<Segment>, format: ExportFormat, timestamps: Boolean = settings.current.includeTimestamps): String =
+        TranscriptFormatter.build(
+            LessonInfo(
+                title = rec.title, course = rec.course, createdAt = rec.createdAt, durationMs = rec.durationMs,
+                modelName = if (rec.modelId.isNotBlank()) modelById(rec.modelId).name else "",
+                partialUntilMs = if (rec.transcription != TxState.DONE) rec.transcribedUntilMs else null,
+            ),
+            segments.map { TextSegment(it.startMs, it.endMs, it.text) },
+            format, timestamps,
+        )
 
-    fun fileName(rec: Recording, ext: String): String {
-        val day = SimpleDateFormat("yyyy-MM-dd", Locale.ITALY).format(Date(rec.createdAt))
-        val safe = rec.title.replace(Regex("[\\\\/:*?\"<>|\\n\\r]"), "_").trim().take(80)
-        return "$day $safe.$ext"
-    }
+    fun fileName(rec: Recording, ext: String): String = TranscriptFormatter.fileName(rec.title, rec.createdAt, ext)
 
     /** Crea un file temporaneo e restituisce l'Intent di condivisione. */
     suspend fun shareIntent(id: Long, format: ExportFormat): Intent? = withContext(Dispatchers.IO) {
@@ -131,31 +98,6 @@ class Exporter(
             if (tryWrite(doc.uri, text)) dao.setExportUri(id, doc.uri.toString())
         } catch (e: Exception) {
             Log.w("Exporter", "Esportazione automatica fallita", e)
-        }
-    }
-
-    companion object {
-        /** Un paragrafo = segmenti consecutivi senza pause lunghe, con il timestamp iniziale. */
-        data class Paragraph(val startMs: Long, val text: String)
-
-        fun paragraphs(segments: List<Segment>): List<Paragraph> {
-            val out = mutableListOf<Paragraph>()
-            var start = -1L
-            var lastEnd = 0L
-            val sb = StringBuilder()
-            for (s in segments) {
-                val newPara = start < 0 || s.startMs - lastEnd > 2_500 || (sb.length > 500 && sb.endsWith('.')) || sb.length > 900
-                if (newPara && sb.isNotEmpty()) {
-                    out += Paragraph(start, sb.toString())
-                    sb.clear()
-                }
-                if (sb.isEmpty()) start = s.startMs
-                if (sb.isNotEmpty()) sb.append(' ')
-                sb.append(s.text)
-                lastEnd = s.endMs
-            }
-            if (sb.isNotEmpty()) out += Paragraph(start, sb.toString())
-            return out
         }
     }
 
