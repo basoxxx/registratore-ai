@@ -1,4 +1,6 @@
-name: Android
+# Nome file invariato di proposito: il numero di build (run_number) continua a crescere
+# ed è usato come versione dell'app per gli aggiornamenti automatici.
+name: Build
 
 on:
   push:
@@ -9,11 +11,12 @@ on:
 permissions:
   contents: write
 
+env:
+  BUILD_NUMBER: ${{ github.run_number }}
+
 jobs:
-  build:
+  android:
     runs-on: ubuntu-latest
-    env:
-      BUILD_NUMBER: ${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,30 +41,101 @@ jobs:
           echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
 
       - name: Test
-        run: ./gradlew testReleaseUnitTest --console=plain
+        run: ./gradlew :core:test --console=plain
 
       - name: Build APK
-        run: ./gradlew assembleRelease --console=plain
+        run: ./gradlew :app:assembleRelease --console=plain
 
       - name: Rinomina APK
         run: |
-          cp app/build/outputs/apk/release/app-release.apk RegistratoreLezioni-1.0.${{ github.run_number }}.apk
+          mkdir dist
+          cp app/build/outputs/apk/release/app-release.apk dist/RegistratoreLezioni-1.0.${{ github.run_number }}.apk
           # Nome fisso: il sito scarica sempre releases/latest/download/RegistratoreLezioni.apk
-          cp app/build/outputs/apk/release/app-release.apk RegistratoreLezioni.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/RegistratoreLezioni.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RegistratoreLezioni-apk
-          path: RegistratoreLezioni-1.0.*.apk
+          name: android
+          path: dist/*
 
-      - name: Pubblica release (usata dagli aggiornamenti automatici dell'app)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: macos-arm64
+            lib: libwhisper_jni.dylib
+          - os: windows-latest
+            target: windows-x64
+            lib: Release/whisper_jni.dll
+    runs-on: ${{ matrix.os }}
+    env:
+      SKIP_ANDROID: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Libreria nativa whisper.cpp
+        run: |
+          cmake -S desktop/native -B build-native -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-native --config Release -j 4
+          mkdir -p desktop/resources/${{ matrix.target }}
+          cp build-native/${{ matrix.lib }} desktop/resources/${{ matrix.target }}/
+
+      - name: Pacchetto macOS (.dmg)
+        if: runner.os == 'macOS'
+        run: |
+          ./gradlew :desktop:createDistributable --console=plain
+          APP="desktop/build/compose/binaries/main/app/Registratore Lezioni.app"
+          # Firma ad-hoc (non serve un account sviluppatore Apple)
+          codesign --force --deep --sign - "$APP"
+          mkdir -p dmg dist
+          cp -R "$APP" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Registratore Lezioni" -srcfolder dmg -ov -format UDZO dist/RegistratoreLezioni-macOS.dmg
+
+      - name: Installer Windows (.msi)
+        if: runner.os == 'Windows'
+        run: |
+          ./gradlew :desktop:packageMsi --console=plain
+          mkdir -p dist
+          cp desktop/build/compose/binaries/main/msi/*.msi dist/RegistratoreLezioni-Windows.msi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    # Pubblica la release (usata dal sito e dagli aggiornamenti automatici) anche se
+    # una delle build desktop dovesse fallire: l'APK Android non resta mai bloccato.
+    needs: [android, desktop]
+    if: always() && needs.android.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - run: ls -la dist
+
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Registratore Lezioni 1.0.${{ github.run_number }}
           body: ${{ github.event.head_commit.message }}
-          files: |
-            RegistratoreLezioni-1.0.${{ github.run_number }}.apk
-            RegistratoreLezioni.apk
+          files: dist/*
           make_latest: true

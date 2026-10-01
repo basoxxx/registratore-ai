@@ -49,8 +49,9 @@ import it.registratoreai.data.Recording
 import it.registratoreai.data.Segment
 import it.registratoreai.service.CaptureService
 import it.registratoreai.service.ServiceState
-import it.registratoreai.ui.formatDuration
-import it.registratoreai.ui.formatTimestamp
+import it.registratoreai.text.formatDuration
+import it.registratoreai.text.formatTimestamp
+import it.registratoreai.transcription.formatEta
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 
@@ -141,7 +142,9 @@ fun RecordScreen(onBack: () -> Unit, onFinished: (Long) -> Unit) {
             Text(
                 when {
                     settings.modelId !in installed -> "Nessun modello scaricato: potrai trascrivere dopo dalle Impostazioni."
-                    liveTx != null -> "Trascrizione in tempo reale · aggiornata a ${formatTimestamp(liveTx.processedMs)}"
+                    liveTx != null -> "Trascrizione in tempo reale · aggiornata a ${formatTimestamp(liveTx.processedMs)}" +
+                        (liveTx.etaMs?.takeIf { liveTx.totalMs - liveTx.processedMs > 60_000 }
+                            ?.let { " · in ritardo, recupero in ${formatEta(it)}" } ?: "")
                     settings.liveTranscription -> "La trascrizione comparirà qui ogni ~30 secondi"
                     settings.autoTranscribe -> "La trascrizione partirà al termine della registrazione"
                     else -> "Trascrizione automatica disattivata"

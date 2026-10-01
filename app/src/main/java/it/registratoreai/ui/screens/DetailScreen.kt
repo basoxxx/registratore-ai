@@ -71,13 +71,15 @@ import it.registratoreai.app
 import it.registratoreai.data.RecState
 import it.registratoreai.data.Recording
 import it.registratoreai.data.TxState
-import it.registratoreai.export.ExportFormat
+import it.registratoreai.text.ExportFormat
 import it.registratoreai.service.CaptureService
 import it.registratoreai.service.ServiceState
+import it.registratoreai.service.TxProgress
+import it.registratoreai.transcription.formatEta
 import it.registratoreai.transcription.modelById
-import it.registratoreai.ui.formatDate
-import it.registratoreai.ui.formatDuration
-import it.registratoreai.ui.formatTimestamp
+import it.registratoreai.text.formatDate
+import it.registratoreai.text.formatDuration
+import it.registratoreai.text.formatTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -236,7 +238,7 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
                 }
 
                 // ---- Stato trascrizione
-                TranscriptionPanel(r, tx?.takeIf { it.recordingId == id }?.fraction, id in queue, settings.modelId in installed,
+                TranscriptionPanel(r, tx?.takeIf { it.recordingId == id }, id in queue, settings.modelId in installed,
                     onTranscribe = { restart ->
                         scope.launch {
                             if (restart) withContext(Dispatchers.IO) {
@@ -332,20 +334,33 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
 @Composable
 private fun TranscriptionPanel(
     rec: Recording,
-    progress: Float?,
+    tx: TxProgress?,
     queued: Boolean,
     modelReady: Boolean,
     onTranscribe: (restart: Boolean) -> Unit,
     onCancel: () -> Unit,
 ) {
+    val app = LocalContext.current.app
+    val settings by app.settings.state.collectAsState()
+    val liveSpeed by ServiceState.speed.collectAsState()
+    val speed = liveSpeed ?: app.transcriber.speedFor(settings.modelId)
     Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Column(Modifier.padding(12.dp)) {
             when {
                 rec.state != RecState.DONE -> Text("La trascrizione viene aggiornata automaticamente durante la registrazione.")
-                progress != null -> {
-                    Text("Trascrizione in corso… ${(progress * 100).toInt()}%", fontWeight = FontWeight.Medium)
+                // In coda: stima basata sulla velocità misurata in precedenza
+                (queued || rec.transcription == TxState.QUEUED) && speed != null -> {
+                    Text("In coda per la trascrizione · durata stimata ${formatEta(((rec.durationMs - rec.transcribedUntilMs) / speed).toLong())}")
+                    TextButton(onClick = onCancel) { Text("Annulla") }
+                }
+                tx != null -> {
+                    Text("Trascrizione in corso… ${(tx.fraction * 100).toInt()}%", fontWeight = FontWeight.Medium)
+                    Text(
+                        tx.etaMs?.let { "Fine stimata tra ${formatEta(it)}" } ?: "Calcolo del tempo rimanente…",
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
+                    )
                     Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth())
+                    LinearProgressIndicator(progress = { tx.fraction }, Modifier.fillMaxWidth())
                     Text(
                         "Il testo compare qui sotto man mano. Puoi uscire dall'app: continua in background.",
                         style = MaterialTheme.typography.bodySmall,

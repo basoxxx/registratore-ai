@@ -17,13 +17,15 @@ import it.registratoreai.data.RecState
 import it.registratoreai.data.Recording
 import it.registratoreai.data.TxState
 import it.registratoreai.service.TxProgress
+import it.registratoreai.transcription.formatEta
 
 @Composable
 fun StatusChip(rec: Recording, progress: TxProgress?, queued: Boolean) {
     val running = progress?.recordingId == rec.id
     val label = when {
         rec.state != RecState.DONE -> "● In registrazione"
-        running -> "Trascrizione ${(progress!!.fraction * 100).toInt()}%"
+        running -> "Trascrizione ${(progress!!.fraction * 100).toInt()}%" +
+            (progress.etaMs?.takeIf { !progress.live }?.let { " · ${formatEta(it)}" } ?: "")
         queued || rec.transcription == TxState.QUEUED -> "In coda"
         rec.transcription == TxState.RUNNING -> "In attesa di ripresa"
         rec.transcription == TxState.DONE -> "Trascritta"

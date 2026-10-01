@@ -65,9 +65,10 @@ import it.registratoreai.data.RecState
 import it.registratoreai.data.Recording
 import it.registratoreai.service.CaptureService
 import it.registratoreai.service.ServiceState
+import it.registratoreai.transcription.formatEta
 import it.registratoreai.transcription.modelById
-import it.registratoreai.ui.formatDuration
-import it.registratoreai.ui.formatShortDate
+import it.registratoreai.text.formatDuration
+import it.registratoreai.text.formatShortDate
 import it.registratoreai.update.UpdateChecker
 import it.registratoreai.update.UpdateInfo
 import kotlinx.coroutines.Dispatchers
@@ -93,6 +94,7 @@ fun HomeScreen(
     val live by ServiceState.recording.collectAsState()
     val tx by ServiceState.transcription.collectAsState()
     val queue by ServiceState.queue.collectAsState()
+    val liveSpeed by ServiceState.speed.collectAsState()
     val settings by app.settings.state.collectAsState()
     val installed by app.models.installed.collectAsState()
     val downloads by app.models.downloads.collectAsState()
@@ -203,6 +205,42 @@ fun HomeScreen(
                         Column(Modifier.padding(16.dp)) {
                             Text(if (l.paused) "Registrazione in pausa" else "● Registrazione in corso", fontWeight = FontWeight.Bold)
                             Text(formatDuration(l.elapsedMs), style = MaterialTheme.typography.headlineSmall)
+                        }
+                    }
+                }
+            }
+            // Riepilogo della coda di trascrizione con il tempo stimato complessivo
+            val current = tx
+            if (current != null || queue.isNotEmpty()) {
+                item {
+                    val speed = liveSpeed ?: app.transcriber.speedFor(settings.modelId)
+                    val currentRec = recordings.firstOrNull { it.id == current?.recordingId }
+                    val queued = recordings.filter { it.id in queue }
+                    val queueMs = speed?.let { sp -> queued.sumOf { ((it.durationMs - it.transcribedUntilMs).coerceAtLeast(0) / sp).toLong() } }
+                    val currentMs = current?.etaMs ?: speed?.let { sp -> current?.let { ((it.totalMs - it.processedMs) / sp).toLong() } } ?: 0L
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("Trascrizione", fontWeight = FontWeight.Bold)
+                            if (current != null && currentRec != null) {
+                                Text(
+                                    "${currentRec.title} · ${(current.fraction * 100).toInt()}%" +
+                                        if (current.live) " · in tempo reale" else "",
+                                    style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                                LinearProgressIndicator(progress = { current.fraction }, Modifier.fillMaxWidth().padding(vertical = 6.dp))
+                            }
+                            if (queued.isNotEmpty()) {
+                                Text("In coda: ${queued.size} ${if (queued.size == 1) "lezione" else "lezioni"}", style = MaterialTheme.typography.bodyMedium)
+                            }
+                            val total = if (queueMs != null) currentMs + queueMs else null
+                            Text(
+                                when {
+                                    current?.live == true && queued.isEmpty() -> "La trascrizione segue la registrazione in corso"
+                                    total != null -> "Fine stimata di tutte le trascrizioni: tra ${formatEta(total)}"
+                                    else -> "Calcolo del tempo stimato…"
+                                },
+                                style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
+                            )
                         }
                     }
                 }

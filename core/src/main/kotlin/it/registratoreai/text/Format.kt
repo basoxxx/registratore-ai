@@ -1,4 +1,4 @@
-package it.registratoreai.ui
+package it.registratoreai.text
 
 import java.text.SimpleDateFormat
 import java.util.Date

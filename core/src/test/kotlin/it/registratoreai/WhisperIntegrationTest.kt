@@ -4,7 +4,7 @@ import it.registratoreai.audio.SAMPLE_RATE
 import it.registratoreai.audio.WavReader
 import it.registratoreai.audio.WavWriter
 import it.registratoreai.transcription.TextCleaner
-import it.registratoreai.transcription.Transcriber
+import it.registratoreai.transcription.Chunker
 import it.registratoreai.transcription.WhisperEngine
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -38,8 +38,8 @@ class WhisperIntegrationTest {
         var chunks = 0
         WavReader(wav).use { r ->
             while (true) {
-                val c = Transcriber.nextChunk(r, offsetMs, live = false)
-                if (c !is Transcriber.Chunk.Audio) break
+                val c = Chunker.nextChunk(r, offsetMs, live = false)
+                if (c !is Chunker.Chunk.Audio) break
                 val t0 = System.currentTimeMillis()
                 val segs = engine.transcribe(c.samples, "it", "Analisi matematica", 4)!!
                 val lenMs = c.samples.size * 1000L / SAMPLE_RATE

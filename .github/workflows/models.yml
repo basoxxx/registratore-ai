@@ -1,0 +1,38 @@
+name: Modelli Whisper
+
+# Pubblica i modelli di trascrizione come file della release "models" di questo repository:
+# le app scaricano i modelli solo da qui. (I file superano il limite di 100 MB di git,
+# mentre gli allegati delle release arrivano a 2 GB.) Va eseguito una volta, o per aggiornarli.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/models.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scarica i modelli ufficiali whisper.cpp
+        run: |
+          mkdir models && cd models
+          for f in ggml-tiny-q5_1.bin ggml-base-q5_1.bin ggml-small-q5_1.bin ggml-large-v3-turbo-q5_0.bin; do
+            curl -fL --retry 5 --retry-delay 5 -o "$f" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$f"
+          done
+          sha256sum *.bin > SHA256SUMS
+          ls -la
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: models
+          target_commitish: main
+          name: Modelli di trascrizione (Whisper)
+          body: |
+            Modelli Whisper (formato ggml di whisper.cpp) scaricati dalle app Registratore Lezioni.
+            Non è una versione dell'app: per installare l'app usa l'ultima release.
+          files: models/*
+          prerelease: true
+          make_latest: false

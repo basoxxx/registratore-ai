@@ -5,7 +5,7 @@ import it.registratoreai.audio.SAMPLE_RATE
 import it.registratoreai.audio.WAV_HEADER_SIZE
 import it.registratoreai.audio.WavReader
 import it.registratoreai.audio.WavWriter
-import it.registratoreai.transcription.Transcriber
+import it.registratoreai.transcription.Chunker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -81,21 +81,21 @@ class AudioTest {
         w.write(first, first.size); w.syncHeader()
         WavReader(f).use { r ->
             // Durante la registrazione con solo 10 s di audio: si aspetta
-            assertTrue(Transcriber.nextChunk(r, 0, live = true) is Transcriber.Chunk.Wait)
+            assertTrue(Chunker.nextChunk(r, 0, live = true) is Chunker.Chunk.Wait)
             val more = tone(13.0)
             val gap = silence(0.6)
             val rest = tone(20.0)
             w.write(more, more.size); w.write(gap, gap.size); w.write(rest, rest.size); w.syncHeader()
-            val c = Transcriber.nextChunk(r, 0, live = true)
-            assertTrue(c is Transcriber.Chunk.Audio)
-            val lenSec = (c as Transcriber.Chunk.Audio).samples.size.toDouble() / SAMPLE_RATE
+            val c = Chunker.nextChunk(r, 0, live = true)
+            assertTrue(c is Chunker.Chunk.Audio)
+            val lenSec = (c as Chunker.Chunk.Audio).samples.size.toDouble() / SAMPLE_RATE
             assertTrue("blocco di $lenSec s tagliato nella pausa", lenSec in 23.0..23.6)
             // Fine registrazione: la coda viene trascritta, poi End
             val offset = (lenSec * 1000).toLong()
-            val tail = Transcriber.nextChunk(r, offset, live = false)
-            assertTrue(tail is Transcriber.Chunk.Audio)
-            val total = offset + (tail as Transcriber.Chunk.Audio).samples.size * 1000L / SAMPLE_RATE
-            assertTrue(Transcriber.nextChunk(r, total, live = false) is Transcriber.Chunk.End)
+            val tail = Chunker.nextChunk(r, offset, live = false)
+            assertTrue(tail is Chunker.Chunk.Audio)
+            val total = offset + (tail as Chunker.Chunk.Audio).samples.size * 1000L / SAMPLE_RATE
+            assertTrue(Chunker.nextChunk(r, total, live = false) is Chunker.Chunk.End)
         }
         w.close()
     }

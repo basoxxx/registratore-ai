@@ -15,6 +15,8 @@ data class TxProgress(
     val processedMs: Long,
     val totalMs: Long,
     val live: Boolean,
+    /** Tempo stimato per trascrivere l'audio rimanente (null finché non c'è una misura). */
+    val etaMs: Long? = null,
 ) {
     val fraction: Float get() = if (totalMs <= 0) 0f else (processedMs.toFloat() / totalMs).coerceIn(0f, 1f)
 }
@@ -24,4 +26,6 @@ object ServiceState {
     val recording = MutableStateFlow<LiveRecording?>(null)
     val transcription = MutableStateFlow<TxProgress?>(null)
     val queue = MutableStateFlow<List<Long>>(emptyList())
+    /** Ultima velocità di trascrizione misurata (ms di audio per ms di calcolo). */
+    val speed = MutableStateFlow<Float?>(null)
 }

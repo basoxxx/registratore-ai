@@ -86,6 +86,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core"))
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
@@ -108,10 +109,5 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    testImplementation("junit:junit:4.13.2")
 }
 
-tasks.withType<Test>().configureEach {
-    System.getenv("WHISPER_JNI_DIR")?.let { systemProperty("java.library.path", it) }
-    testLogging { showStandardStreams = true }
-}
