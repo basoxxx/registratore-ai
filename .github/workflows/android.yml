@@ -44,12 +44,15 @@ jobs:
         run: ./gradlew assembleRelease --console=plain
 
       - name: Rinomina APK
-        run: cp app/build/outputs/apk/release/app-release.apk RegistratoreLezioni-1.0.${{ github.run_number }}.apk
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk RegistratoreLezioni-1.0.${{ github.run_number }}.apk
+          # Nome fisso: il sito scarica sempre releases/latest/download/RegistratoreLezioni.apk
+          cp app/build/outputs/apk/release/app-release.apk RegistratoreLezioni.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: RegistratoreLezioni-apk
-          path: RegistratoreLezioni-*.apk
+          path: RegistratoreLezioni-1.0.*.apk
 
       - name: Pubblica release (usata dagli aggiornamenti automatici dell'app)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -58,5 +61,7 @@ jobs:
           tag_name: v1.0.${{ github.run_number }}
           name: Registratore Lezioni 1.0.${{ github.run_number }}
           body: ${{ github.event.head_commit.message }}
-          files: RegistratoreLezioni-*.apk
+          files: |
+            RegistratoreLezioni-1.0.${{ github.run_number }}.apk
+            RegistratoreLezioni.apk
           make_latest: true

@@ -29,6 +29,9 @@ sul telefono, offline**, con esportazione in **Markdown** e testo.
 
 ## Installazione
 
+Sito: **https://basoxxx.github.io/registratore-ai/**
+
+
 1. Apri la pagina [Releases](https://github.com/basoxxx/registratore-ai/releases/latest) dal telefono.
 2. Scarica `RegistratoreLezioni-x.y.z.apk` e aprilo (consenti l'installazione da questa sorgente).
 3. Al primo avvio concedi microfono e notifiche, poi scarica il modello di trascrizione.
@@ -65,6 +68,7 @@ Struttura:
 - `audio/` – WAV robusto, conversioni (import e compressione) con MediaCodec
 - `export/Exporter.kt` – Markdown/TXT, condivisione, esportazione automatica
 - `update/UpdateChecker.kt` – aggiornamenti dall'ultima GitHub Release
+- `site/` – sito di presentazione pubblicato su GitHub Pages
 
 ### Release e firma
 
