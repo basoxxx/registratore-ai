@@ -1,0 +1,55 @@
+package it.registratoreai.transcription
+
+/** Binding JNI verso whisper.cpp (vedi app/src/main/cpp/whisper_jni.cpp). */
+object WhisperLib {
+    init {
+        System.loadLibrary("whisper_jni")
+    }
+
+    external fun initContext(modelPath: String): Long
+    external fun freeContext(ptr: Long)
+    external fun requestAbort(value: Boolean)
+    external fun transcribe(ptr: Long, samples: FloatArray, language: String, prompt: String?, threads: Int): Int
+    external fun segmentT0(ptr: Long, i: Int): Long
+    external fun segmentT1(ptr: Long, i: Int): Long
+    external fun segmentText(ptr: Long, i: Int): ByteArray
+    external fun systemInfo(): String
+}
+
+data class RawSegment(val startMs: Long, val endMs: Long, val text: String)
+
+/** Mantiene un solo modello caricato in memoria; l'accesso è serializzato dal chiamante. */
+class WhisperEngine {
+    private var ptr = 0L
+    private var loadedPath: String? = null
+
+    @Synchronized
+    fun ensureLoaded(path: String): Boolean {
+        if (ptr != 0L && loadedPath == path) return true
+        release()
+        ptr = WhisperLib.initContext(path)
+        loadedPath = if (ptr != 0L) path else null
+        return ptr != 0L
+    }
+
+    @Synchronized
+    fun transcribe(samples: FloatArray, language: String, prompt: String?, threads: Int): List<RawSegment>? {
+        check(ptr != 0L) { "Modello non caricato" }
+        val n = WhisperLib.transcribe(ptr, samples, language, prompt, threads)
+        if (n < 0) return null
+        return (0 until n).map {
+            RawSegment(
+                WhisperLib.segmentT0(ptr, it),
+                WhisperLib.segmentT1(ptr, it),
+                String(WhisperLib.segmentText(ptr, it), Charsets.UTF_8),
+            )
+        }
+    }
+
+    @Synchronized
+    fun release() {
+        if (ptr != 0L) WhisperLib.freeContext(ptr)
+        ptr = 0L
+        loadedPath = null
+    }
+}

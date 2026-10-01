@@ -1,0 +1,62 @@
+name: Android
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Keystore di firma (opzionale, dai secret del repository)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > $RUNNER_TEMP/release.keystore
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> $GITHUB_ENV
+          echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+          echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
+
+      - name: Test
+        run: ./gradlew testReleaseUnitTest --console=plain
+
+      - name: Build APK
+        run: ./gradlew assembleRelease --console=plain
+
+      - name: Rinomina APK
+        run: cp app/build/outputs/apk/release/app-release.apk RegistratoreLezioni-1.0.${{ github.run_number }}.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RegistratoreLezioni-apk
+          path: RegistratoreLezioni-*.apk
+
+      - name: Pubblica release (usata dagli aggiornamenti automatici dell'app)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Registratore Lezioni 1.0.${{ github.run_number }}
+          body: ${{ github.event.head_commit.message }}
+          files: RegistratoreLezioni-*.apk
+          make_latest: true
