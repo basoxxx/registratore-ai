@@ -20,9 +20,12 @@ data class WhisperModel(
     val fileName: String,
     val sizeBytes: Long,
 ) {
-    val url get() = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$fileName"
+    /** I modelli sono pubblicati come file della release "models" di questo repository. */
+    val url get() = "$MODELS_BASE_URL/$fileName"
     val sizeMb get() = sizeBytes / 1_000_000
 }
+
+const val MODELS_BASE_URL = "https://github.com/basoxxx/registratore-ai/releases/download/models"
 
 val MODELS = listOf(
     WhisperModel("tiny-q5_1", "Tiny", "Velocissimo, qualità base. Per telefoni datati.", "ggml-tiny-q5_1.bin", 32_152_673),

@@ -31,6 +31,7 @@ import it.registratoreai.data.RecState
 import it.registratoreai.data.Recording
 import it.registratoreai.data.TxState
 import it.registratoreai.text.formatDuration
+import it.registratoreai.transcription.formatEta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -191,7 +192,10 @@ class CaptureService : Service() {
         } else {
             b.setContentTitle("Trascrizione in corso")
             if (tx != null) {
-                b.setContentText("${(tx.fraction * 100).toInt()}% · ${formatDuration(tx.processedMs)} di ${formatDuration(tx.totalMs)}")
+                b.setContentText(
+                    "${(tx.fraction * 100).toInt()}% · ${formatDuration(tx.processedMs)} di ${formatDuration(tx.totalMs)}" +
+                        (tx.etaMs?.let { " · fine tra ${formatEta(it)}" } ?: "")
+                )
                 b.setProgress(1000, (tx.fraction * 1000).toInt(), false)
             } else {
                 b.setContentText("Preparazione…")

@@ -14,6 +14,8 @@ App per **Android, macOS e Windows** per **registrare le lezioni universitarie**
   - **Dopo**: al termine della registrazione, oppure quando vuoi, anche su file audio importati
     (mp3, m4a, ogg, wav… anche condivisi da altre app, es. WhatsApp/Telegram).
   - Interrompibile e **riprendibile** dal punto in cui si era fermata.
+  - **Tempo stimato** di fine trascrizione, per la singola lezione e per l'intera coda
+    (misurato sulla velocità reale del dispositivo e ricordato per ogni modello).
   - I blocchi audio sono tagliati nelle pause; il nome del corso viene usato come contesto per
     migliorare la precisione; le tipiche "allucinazioni" di Whisper sul silenzio vengono filtrate.
 - **Esportazione** in Markdown (`.md`) o testo (`.txt`), con timestamp per paragrafo:
@@ -53,6 +55,10 @@ Le lezioni vengono salvate in `Documenti/Registratore Lezioni`, una cartella per
 Sul computer si possono importare file WAV/AIFF.
 
 ## Quale modello scegliere
+
+I modelli vengono scaricati dalla release [`models`](https://github.com/basoxxx/registratore-ai/releases/tag/models)
+di questo repository (pubblicata dal workflow *Modelli Whisper*: i file superano il limite di
+100 MB di git, ma gli allegati delle release arrivano a 2 GB).
 
 | Modello | Dimensione | Uso consigliato |
 |---|---|---|

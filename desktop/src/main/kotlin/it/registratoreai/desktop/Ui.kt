@@ -86,6 +86,7 @@ import it.registratoreai.text.formatDuration
 import it.registratoreai.text.formatShortDate
 import it.registratoreai.text.formatTimestamp
 import it.registratoreai.transcription.MODELS
+import it.registratoreai.transcription.formatEta
 import it.registratoreai.transcription.modelById
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -200,6 +201,32 @@ private fun Sidebar(app: DesktopApp, frame: Frame, selected: String?, onSelect: 
             }
         }
 
+        val p = progress
+        if (p != null || queue.isNotEmpty()) {
+            val speed by app.speed.collectAsState()
+            val total = remember(p, queue, speed) { app.totalEtaMs() }
+            val liveOnly = p != null && p.lessonId == live?.lessonId && queue.isEmpty()
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("Trascrizione", fontWeight = FontWeight.Bold)
+                    if (p != null) {
+                        Text("${app.lesson(p.lessonId)?.title ?: ""} · ${(p.fraction * 100).toInt()}%", maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                        LinearProgressIndicator(progress = { p.fraction }, Modifier.fillMaxWidth().padding(vertical = 4.dp))
+                    }
+                    if (queue.isNotEmpty()) Text("In coda: ${queue.size}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        when {
+                            liveOnly -> "Segue la registrazione in corso"
+                            total != null -> "Fine di tutto tra ${formatEta(total)}"
+                            else -> "Calcolo del tempo stimato…"
+                        },
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
+
         OutlinedTextField(
             query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
             leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Cerca nelle lezioni") },
@@ -259,7 +286,7 @@ private fun Sidebar(app: DesktopApp, frame: Frame, selected: String?, onSelect: 
 
 private fun statusLabel(l: Lesson, p: TxProgress?, queued: Boolean): String = when {
     l.recording -> "● in registrazione"
-    p?.lessonId == l.id -> "trascrizione ${(p.fraction * 100).toInt()}%"
+    p?.lessonId == l.id -> "trascrizione ${(p.fraction * 100).toInt()}%" + (p.etaMs?.takeIf { !l.recording }?.let { ", ${formatEta(it)}" } ?: "")
     queued || l.status == TxStatus.QUEUED -> "in coda"
     l.status == TxStatus.DONE -> "trascritta"
     l.status == TxStatus.ERROR -> "errore"
@@ -404,18 +431,24 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
                 val p = progress?.takeIf { it.lessonId == id }
                 val queued = id in queue || lesson.status == TxStatus.QUEUED
                 when {
-                    lesson.recording && p != null -> Text("Trascrizione in tempo reale · aggiornata a ${formatTimestamp(p.processedMs)}")
+                    lesson.recording && p != null -> Text("Trascrizione in tempo reale · aggiornata a ${formatTimestamp(p.processedMs)}" +
+                        (p.etaMs?.takeIf { p.totalMs - p.processedMs > 60_000 }?.let { " · in ritardo, recupero in ${formatEta(it)}" } ?: ""))
                     lesson.recording -> Text(
                         if (settings.liveTranscription && settings.modelId in installed) "La trascrizione comparirà qui ogni ~30 secondi."
                         else "La trascrizione partirà al termine della registrazione."
                     )
                     p != null -> {
                         Text("Trascrizione in corso… ${(p.fraction * 100).toInt()}%", fontWeight = FontWeight.Medium)
+                        Text(p.etaMs?.let { "Fine stimata tra ${formatEta(it)}" } ?: "Calcolo del tempo rimanente…",
+                            color = MaterialTheme.colorScheme.primary)
                         LinearProgressIndicator(progress = { p.fraction }, Modifier.fillMaxWidth().padding(vertical = 6.dp))
                         TextButton(onClick = { app.cancel(id) }) { Text("Interrompi") }
                     }
                     queued -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("In coda per la trascrizione", Modifier.weight(1f))
+                        val sp = app.speedFor(settings.modelId)
+                        Text("In coda per la trascrizione" +
+                            (sp?.let { " · durata stimata ${formatEta(((lesson.durationMs - lesson.transcribedUntilMs).coerceAtLeast(0) / it).toLong())}" } ?: ""),
+                            Modifier.weight(1f))
                         TextButton(onClick = { app.cancel(id) }) { Text("Annulla") }
                     }
                     settings.modelId !in installed -> ModelDownloadCard(app, settings.modelId)

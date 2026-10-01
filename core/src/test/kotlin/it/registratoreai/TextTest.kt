@@ -33,3 +33,16 @@ class TextTest {
         assertEquals(10_000, p[1].startMs)
     }
 }
+
+class EtaTest {
+    @org.junit.Test
+    fun estimatesRemainingTime() {
+        val e = it.registratoreai.transcription.EtaEstimator()
+        org.junit.Assert.assertNull(e.etaMs(60_000))
+        e.record(audioMs = 30_000, wallMs = 3_000) // 10x tempo reale
+        org.junit.Assert.assertEquals(360_000L, e.etaMs(3_600_000)) // 1 h di audio -> 6 min
+        org.junit.Assert.assertEquals("~6 min", it.registratoreai.transcription.formatEta(360_000))
+        org.junit.Assert.assertEquals("meno di 1 min", it.registratoreai.transcription.formatEta(20_000))
+        org.junit.Assert.assertEquals("~1 h 20 min", it.registratoreai.transcription.formatEta(80 * 60_000L))
+    }
+}

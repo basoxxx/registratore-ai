@@ -6,6 +6,8 @@ import it.registratoreai.audio.WavWriter
 import it.registratoreai.audio.samplesToMs
 import it.registratoreai.text.TextSegment
 import it.registratoreai.transcription.Chunker
+import it.registratoreai.transcription.EtaEstimator
+import it.registratoreai.transcription.SpeedStore
 import it.registratoreai.transcription.ModelStore
 import it.registratoreai.transcription.TextCleaner
 import it.registratoreai.transcription.WhisperEngine
@@ -30,7 +32,7 @@ import java.net.URL
 import kotlin.coroutines.coroutineContext
 
 data class LiveRecording(val lessonId: String, val elapsedMs: Long = 0, val paused: Boolean = false, val level: Float = 0f)
-data class TxProgress(val lessonId: String, val processedMs: Long, val totalMs: Long) {
+data class TxProgress(val lessonId: String, val processedMs: Long, val totalMs: Long, val etaMs: Long? = null) {
     val fraction: Float get() = if (totalMs <= 0) 0f else (processedMs.toFloat() / totalMs).coerceIn(0f, 1f)
 }
 data class UpdateInfo(val version: String, val url: String)
@@ -53,6 +55,21 @@ class DesktopApp {
     val queue = MutableStateFlow<List<String>>(emptyList())
     val messages = MutableStateFlow<String?>(null)
     val update = MutableStateFlow<UpdateInfo?>(null)
+    /** Velocità di trascrizione misurata (ms di audio per ms di calcolo), per i tempi stimati. */
+    val speed = MutableStateFlow<Float?>(null)
+    private val speeds = SpeedStore(File(Paths.dataDir, "speed.properties"))
+    private var eta = EtaEstimator()
+
+    fun speedFor(modelId: String): Float? = speed.value ?: speeds.get(modelId)
+
+    /** Tempo stimato per finire tutte le trascrizioni (lezione corrente + coda). */
+    fun totalEtaMs(): Long? {
+        val sp = speedFor(_settings.value.modelId) ?: return null
+        val p = progress.value
+        val current = p?.let { it.etaMs ?: ((it.totalMs - it.processedMs) / sp).toLong() } ?: 0L
+        val queued = queue.value.mapNotNull { lesson(it) }.sumOf { ((it.durationMs - it.transcribedUntilMs).coerceAtLeast(0) / sp).toLong() }
+        return current + queued
+    }
 
     private var recorder: Recorder? = null
     private val queueLock = Mutex()
@@ -252,6 +269,8 @@ class DesktopApp {
         if (!engine.ensureLoaded(path)) error("Impossibile caricare il modello: riscaricalo dalle Impostazioni.")
         var lesson = mutate(id) { it.copy(status = TxStatus.RUNNING, modelId = s.modelId, language = s.language) } ?: return
 
+        eta = EtaEstimator(speeds.get(s.modelId))
+        speed.value = eta.speed
         var offsetMs = start.transcribedUntilMs
         var segments = lesson.segments.filter { it.startMs < offsetMs }
         var promptTail = segments.takeLast(6).joinToString(" ") { it.text }.takeLast(200)
@@ -265,7 +284,7 @@ class DesktopApp {
                     is Chunker.Chunk.Audio -> c.samples
                     Chunker.Chunk.End -> break
                     Chunker.Chunk.Wait -> {
-                        progress.value = TxProgress(id, offsetMs, samplesToMs(reader.availableSamples()))
+                        progress.value = progressOf(id, offsetMs, samplesToMs(reader.availableSamples()))
                         delay(2_000)
                         continue
                     }
@@ -274,7 +293,11 @@ class DesktopApp {
                 val lenMs = samplesToMs(samples.size.toLong())
                 if (AudioMath.rms(samples) > Chunker.SILENCE_RMS) {
                     val prompt = listOf(lesson.course, promptTail).filter { it.isNotBlank() }.joinToString(". ")
+                    val t0 = System.currentTimeMillis()
                     val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads)
+                    eta.record(lenMs, System.currentTimeMillis() - t0)
+                    speeds.put(s.modelId, eta.speed)
+                    speed.value = eta.speed
                     coroutineContext.ensureActive()
                     raw ?: error("Errore durante la trascrizione")
                     val fresh = mutableListOf<TextSegment>()
@@ -291,11 +314,14 @@ class DesktopApp {
                 val segs = segments
                 val until = offsetMs
                 lesson = mutate(id) { it.copy(segments = segs, transcribedUntilMs = until) } ?: return
-                progress.value = TxProgress(id, offsetMs, samplesToMs(reader.availableSamples()))
+                progress.value = progressOf(id, offsetMs, samplesToMs(reader.availableSamples()))
             }
         }
         mutate(id) { it.copy(status = TxStatus.DONE) }
     }
+
+    private fun progressOf(id: String, processed: Long, total: Long) =
+        TxProgress(id, processed, total, eta.etaMs(total - processed))
 
     // ------------------------------------------------------------------ Aggiornamenti
 

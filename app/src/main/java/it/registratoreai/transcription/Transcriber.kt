@@ -21,6 +21,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import it.registratoreai.transcription.EtaEstimator
+import it.registratoreai.transcription.SpeedStore
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -43,6 +45,12 @@ class Transcriber(
         private const val TAG = "Transcriber"
         private const val PROMPT_CHARS = 200
     }
+
+    private val speeds = SpeedStore(File(context.filesDir, "speed.properties"))
+    private var eta = EtaEstimator()
+
+    /** Velocità nota del modello (ms di audio per ms di calcolo), per stimare la coda. */
+    fun speedFor(modelId: String): Float? = speeds.get(modelId)
 
     suspend fun run(id: Long) = withContext(Dispatchers.Default) {
         val rec = dao.get(id) ?: return@withContext
@@ -70,6 +78,8 @@ class Transcriber(
             }
         }
 
+        eta = EtaEstimator(speeds.get(s.modelId))
+        ServiceState.speed.value = eta.speed
         var offsetMs = rec.transcribedUntilMs
         // Se l'app si era chiusa a metà di un blocco, eliminiamo i segmenti oltre l'ultimo punto salvato.
         dao.deleteSegmentsFrom(id, offsetMs)
@@ -99,7 +109,11 @@ class Transcriber(
                     if (AudioMath.rms(samples) > Chunker.SILENCE_RMS) {
                         val prompt = listOf(rec.course.takeIf { it.isNotBlank() }, promptTail.takeIf { it.isNotBlank() })
                             .filterNotNull().joinToString(". ")
+                        val t0 = System.currentTimeMillis()
                         val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads)
+                        eta.record(chunkLenMs, System.currentTimeMillis() - t0)
+                        speeds.put(s.modelId, eta.speed)
+                        ServiceState.speed.value = eta.speed
                         coroutineContext.ensureActive()
                         if (raw == null) error("Errore durante la trascrizione")
 
@@ -136,7 +150,7 @@ class Transcriber(
     }
 
     private fun publish(id: Long, processed: Long, total: Long, live: Boolean) {
-        ServiceState.transcription.value = TxProgress(id, processed, total, live)
+        ServiceState.transcription.value = TxProgress(id, processed, total, live, eta.etaMs(total - processed))
     }
 
     private suspend fun compress(id: Long, wav: File) {
