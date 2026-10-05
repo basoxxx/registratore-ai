@@ -8,13 +8,26 @@ package it.registratoreai.transcription
 object WhisperNative {
     @Volatile
     var preloaded = false
+
+    /** Cartella in cui ggml cerca le varianti del backend CPU (nativeLibraryDir su Android). */
+    @Volatile
+    var backendsDir: String? = null
 }
 
 /** Binding JNI verso whisper.cpp (vedi app/src/main/cpp/whisper_jni.cpp). */
 object WhisperLib {
     init {
         if (!WhisperNative.preloaded) System.loadLibrary("whisper_jni")
+        initBackends(WhisperNative.backendsDir)
     }
+
+    external fun initBackends(dir: String?)
+    external fun vadInit(modelPath: String, threads: Int): Long
+    external fun vadFree(ptr: Long)
+    external fun vadSegments(
+        ptr: Long, samples: FloatArray, threshold: Float, minSpeechMs: Int, minSilenceMs: Int,
+        maxSpeechS: Float, padMs: Int,
+    ): LongArray?
 
     external fun initContext(modelPath: String): Long
     external fun freeContext(ptr: Long)

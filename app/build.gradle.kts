@@ -81,7 +81,8 @@ android {
         buildConfig = true
     }
     packaging {
-        jniLibs.useLegacyPackaging = false
+        // Le librerie vengono estratte su disco: ggml cerca le varianti CPU nella cartella nativeLibraryDir
+        jniLibs.useLegacyPackaging = true
     }
 }
 

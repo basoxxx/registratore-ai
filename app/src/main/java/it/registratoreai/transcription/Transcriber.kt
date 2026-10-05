@@ -22,6 +22,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import it.registratoreai.transcription.EtaEstimator
+import it.registratoreai.transcription.SpeechPacker
+import it.registratoreai.transcription.WhisperVad
 import it.registratoreai.transcription.SpeedStore
 import kotlin.coroutines.coroutineContext
 
@@ -48,6 +50,13 @@ class Transcriber(
 
     private val speeds = SpeedStore(File(context.filesDir, "speed.properties"))
     private var eta = EtaEstimator()
+    private var vadInstance: WhisperVad? = null
+
+    private fun vad(): WhisperVad? {
+        vadInstance?.let { return it }
+        val model = WhisperVad.extractModel(File(context.filesDir, "vad")) ?: return null
+        return WhisperVad(model.absolutePath).takeIf { it.ok }?.also { vadInstance = it }
+    }
 
     /** Velocità nota del modello (ms di audio per ms di calcolo), per stimare la coda. */
     fun speedFor(modelId: String): Float? = speeds.get(modelId)
@@ -80,6 +89,8 @@ class Transcriber(
 
         eta = EtaEstimator(speeds.get(s.modelId))
         ServiceState.speed.value = eta.speed
+        // Dopo la lezione: VAD + impacchettamento del parlato (vedi SpeechPacker)
+        val packer = vad()?.let { SpeechPacker(it) } ?: SpeechPacker { null }
         var offsetMs = rec.transcribedUntilMs
         // Se l'app si era chiusa a metà di un blocco, eliminiamo i segmenti oltre l'ultimo punto salvato.
         dao.deleteSegmentsFrom(id, offsetMs)
@@ -92,8 +103,15 @@ class Transcriber(
                 while (true) {
                     coroutineContext.ensureActive()
                     val live = ServiceState.recording.value?.recordingId == id
-                    val samples = when (val next = Chunker.nextChunk(reader, offsetMs, live)) {
-                        is Chunker.Chunk.Audio -> next.samples
+                    val window = when (val next = packer.next(reader, offsetMs, live)) {
+                        is Chunker.Chunk.Audio -> next.window
+                        is Chunker.Chunk.Skip -> {
+                            // Solo silenzio: si avanza senza chiamare Whisper
+                            offsetMs = next.endMs
+                            dao.setTranscribedUntil(id, offsetMs)
+                            publish(id, offsetMs, samplesToMs(reader.availableSamples()), live)
+                            continue
+                        }
                         Chunker.Chunk.End -> break
                         Chunker.Chunk.Wait -> {
                             // In registrazione: aspettiamo che arrivi abbastanza audio.
@@ -102,16 +120,17 @@ class Transcriber(
                             continue
                         }
                     }
+                    val samples = window.samples
                     if (samples.isEmpty()) break
 
                     val chunkStartMs = offsetMs
-                    val chunkLenMs = samplesToMs(samples.size.toLong())
                     if (AudioMath.rms(samples) > Chunker.SILENCE_RMS) {
                         val prompt = listOf(rec.course.takeIf { it.isNotBlank() }, promptTail.takeIf { it.isNotBlank() })
                             .filterNotNull().joinToString(". ")
                         val t0 = System.currentTimeMillis()
                         val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads)
-                        eta.record(chunkLenMs, System.currentTimeMillis() - t0)
+                        // Velocità misurata sull'audio originale coperto (silenzi saltati inclusi)
+                        eta.record(window.endMs - chunkStartMs, System.currentTimeMillis() - t0)
                         speeds.put(s.modelId, eta.speed)
                         ServiceState.speed.value = eta.speed
                         coroutineContext.ensureActive()
@@ -124,8 +143,8 @@ class Transcriber(
                             lastText = text
                             segments += Segment(
                                 recordingId = id,
-                                startMs = chunkStartMs + r.startMs.coerceIn(0, chunkLenMs),
-                                endMs = chunkStartMs + r.endMs.coerceIn(0, chunkLenMs),
+                                startMs = window.toSourceMs(r.startMs),
+                                endMs = window.toSourceMs(r.endMs),
                                 text = text,
                             )
                         }
@@ -134,7 +153,7 @@ class Transcriber(
                             promptTail = (promptTail + " " + segments.joinToString(" ") { it.text }).takeLast(PROMPT_CHARS)
                         }
                     }
-                    offsetMs += chunkLenMs
+                    offsetMs = window.endMs
                     dao.setTranscribedUntil(id, offsetMs)
                     publish(id, offsetMs, samplesToMs(reader.availableSamples()), live)
                     exporter.autoExport(id)

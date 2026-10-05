@@ -4,6 +4,7 @@ import it.registratoreai.audio.AudioMath
 import it.registratoreai.audio.SAMPLE_RATE
 import it.registratoreai.audio.WavReader
 import it.registratoreai.audio.msToSamples
+import it.registratoreai.audio.samplesToMs
 
 /** Suddivisione dell'audio in blocchi per Whisper (comune ad Android e desktop). */
 object Chunker {
@@ -13,8 +14,33 @@ object Chunker {
     /** Blocchi più silenziosi di così non vengono passati a whisper (evita "allucinazioni"). */
     const val SILENCE_RMS = 0.0025f
 
+    /**
+     * Audio da passare a Whisper. Può essere un tratto continuo oppure più frammenti di
+     * parlato accostati (vedi [SpeechPacker]): [toSourceMs] riporta i tempi sull'audio originale.
+     */
+    class Window(val samples: FloatArray, val pieces: List<Piece>, val endMs: Long) {
+        /** Un frammento: inizia a [winStartMs] nella finestra e a [srcStartMs] nell'audio originale. */
+        data class Piece(val winStartMs: Long, val srcStartMs: Long, val lenMs: Long)
+
+        fun toSourceMs(winMs: Long): Long {
+            val p = pieces.lastOrNull { it.winStartMs <= winMs } ?: pieces.first()
+            return p.srcStartMs + (winMs - p.winStartMs).coerceIn(0, p.lenMs)
+        }
+
+        companion object {
+            fun continuous(samples: FloatArray, startMs: Long): Window {
+                val len = samplesToMs(samples.size.toLong())
+                return Window(samples, listOf(Piece(0, startMs, len)), startMs + len)
+            }
+        }
+    }
+
     sealed interface Chunk {
-        class Audio(val samples: FloatArray) : Chunk
+        class Audio(val window: Window) : Chunk {
+            val samples: FloatArray get() = window.samples
+        }
+        /** Solo silenzio fino a [endMs]: si avanza senza trascrivere. */
+        class Skip(val endMs: Long) : Chunk
         data object Wait : Chunk
         data object End : Chunk
     }
@@ -30,10 +56,10 @@ object Chunker {
         return when {
             remaining >= MAX_CHUNK -> {
                 val x = reader.readFloats(start, MAX_CHUNK)
-                Chunk.Audio(x.copyOf(AudioMath.quietestCut(x, MIN_CHUNK, x.size)))
+                Chunk.Audio(Window.continuous(x.copyOf(AudioMath.quietestCut(x, MIN_CHUNK, x.size)), offsetMs))
             }
             live -> Chunk.Wait
-            remaining > MIN_TAIL -> Chunk.Audio(reader.readFloats(start, remaining.toInt()))
+            remaining > MIN_TAIL -> Chunk.Audio(Window.continuous(reader.readFloats(start, remaining.toInt()), offsetMs))
             else -> Chunk.End
         }
     }

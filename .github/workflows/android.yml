@@ -65,10 +65,8 @@ jobs:
         include:
           - os: macos-14
             target: macos-arm64
-            lib: libwhisper_jni.dylib
           - os: windows-latest
             target: windows-x64
-            lib: Release/whisper_jni.dll
     runs-on: ${{ matrix.os }}
     env:
       SKIP_ANDROID: "1"
@@ -92,7 +90,9 @@ jobs:
           cmake -S desktop/native -B build-native -DCMAKE_BUILD_TYPE=Release
           cmake --build build-native --config Release -j 4
           mkdir -p desktop/resources/${{ matrix.target }}
-          cp build-native/${{ matrix.lib }} desktop/resources/${{ matrix.target }}/
+          # whisper_jni + (su Windows) whisper/ggml e le varianti CPU ggml-cpu-*
+          find build-native/out -maxdepth 1 \( -name "*.dll" -o -name "*.dylib" -o -name "*.so" \) -exec cp {} desktop/resources/${{ matrix.target }}/ \;
+          ls -la desktop/resources/${{ matrix.target }}
 
       - name: Pacchetto macOS (.dmg)
         if: runner.os == 'macOS'

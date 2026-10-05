@@ -4,6 +4,7 @@ import it.registratoreai.text.ExportFormat
 import it.registratoreai.text.LessonInfo
 import it.registratoreai.text.TextSegment
 import it.registratoreai.text.TranscriptFormatter
+import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.modelById
 import org.json.JSONArray
 import org.json.JSONObject
@@ -144,7 +145,7 @@ data class DesktopSettings(
             if (!file.exists()) return d
             val p = Properties().apply { file.inputStream().use { load(it) } }
             return DesktopSettings(
-                modelId = p.getProperty("modelId", d.modelId),
+                modelId = canonicalModelId(p.getProperty("modelId", d.modelId)),
                 language = p.getProperty("language", d.language),
                 liveTranscription = p.getProperty("live", "${d.liveTranscription}").toBoolean(),
                 autoTranscribe = p.getProperty("autoTranscribe", "${d.autoTranscribe}").toBoolean(),

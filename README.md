@@ -65,7 +65,22 @@ di questo repository (pubblicata dal workflow *Modelli Whisper*: i file superano
 | Tiny | 32 MB | Telefoni datati, solo bozze |
 | **Base** (predefinito) | 60 MB | Tempo reale su quasi tutti i telefoni |
 | **Small** | 190 MB | Molto più preciso in italiano; tempo reale sui telefoni recenti |
-| Large v3 Turbo | 574 MB | Massima qualità, da usare "dopo" la lezione |
+| Large v3 Turbo | 474 MB | Massima qualità, ottimizzato per trascrivere "dopo" la lezione |
+
+### Ottimizzazioni della trascrizione "dopo"
+
+Misurate con Large v3 Turbo su 4,5 minuti di lezione (CPU a 4 core):
+
+| Configurazione | Tempo | Errori (WER) |
+|---|---|---|
+| Prima: Q5_0, blocchi da 30 s | 366 s | 12,3% |
+| + VAD: si salta il silenzio e il parlato viene impacchettato in finestre piene | 233 s | 11,0% |
+| + modello Q4_0 (routine "repack" di ggml) | **95 s** | **10,8%** |
+
+Inoltre il backend CPU è compilato in più varianti (Android: ARMv8.0 / 8.2 dotprod / 8.2 fp16 /
+8.6 i8mm; Windows/Linux: da SSE4.2 ad AVX-512) e all'avvio viene caricata la più veloce supportata
+dal processore. Sui Mac la flash attention è attiva sulla GPU (su CPU rallenta, quindi lì è spenta).
+Elaborare due blocchi in parallelo non dà vantaggi misurabili (la CPU è già sfruttata al massimo).
 
 Suggerimento: usa *Base* in tempo reale durante la lezione e, per le lezioni importanti,
 "Ritrascrivi" con *Small* o *Large v3 Turbo* la sera mentre il telefono è in carica.
