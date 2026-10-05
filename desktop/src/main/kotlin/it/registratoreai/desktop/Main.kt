@@ -68,7 +68,7 @@ private fun selfTest(args: List<String>) {
             }
             val t = System.currentTimeMillis()
             if (!Chunker.isSilent(w.samples)) {
-                var raw = engine.transcribe(w.samples, lang, null, threads, beam)!!
+                var raw = engine.transcribe(w.samples, lang, System.getenv("RL_PROMPT"), threads, beam)!!
                 if (backup != null) {
                     val speech = w.pieces.sumOf { it.lenMs }
                     val first = it.registratoreai.transcription.QualityCheck.evaluate(raw.map { it.text }, speech)
