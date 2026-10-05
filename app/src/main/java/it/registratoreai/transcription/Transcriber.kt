@@ -24,6 +24,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import it.registratoreai.transcription.EtaEstimator
 import it.registratoreai.transcription.beamSizeFor
+import it.registratoreai.transcription.crossCheckModelFor
 import it.registratoreai.transcription.SpeechPacker
 import it.registratoreai.transcription.WhisperVad
 import it.registratoreai.transcription.SpeedStore
@@ -60,7 +61,30 @@ class Transcriber(
         return WhisperVad(model.absolutePath).takeIf { it.ok }?.also { vadInstance = it }
     }
 
-    fun releaseEngine() = engine.release()
+    /** Secondo modello per la verifica incrociata dei tratti sospetti (caricato solo se serve). */
+    private val backupEngine = WhisperEngine()
+
+    fun releaseEngine() {
+        engine.release()
+        backupEngine.release()
+    }
+
+    /**
+     * Se la trascrizione della finestra sembra sbagliata (ripetizioni, troppo poco testo…),
+     * la ritrascrive con l'altro modello grande e tiene il risultato migliore.
+     */
+    private fun crossCheck(
+        raw: List<RawSegment>, samples: FloatArray, speechMs: Long, modelId: String,
+        language: String, prompt: String?, threads: Int,
+    ): List<RawSegment> {
+        val first = QualityCheck.evaluate(raw.map { it.text }, speechMs)
+        if (!first.suspicious) return raw
+        val otherId = crossCheckModelFor(modelId) ?: return raw
+        val path = models.pathFor(otherId) ?: return raw
+        if (!backupEngine.ensureLoaded(path)) return raw
+        val alt = backupEngine.transcribe(samples, language, prompt, threads, beamSizeFor(otherId)) ?: return raw
+        return if (QualityCheck.secondIsBetter(first, QualityCheck.evaluate(alt.map { it.text }, speechMs))) alt else raw
+    }
 
     /** Velocità nota del modello (ms di audio per ms di calcolo), per stimare la coda. */
     fun speedFor(modelId: String): Float? = speeds.get(modelId)
@@ -140,7 +164,10 @@ class Transcriber(
                         val prompt = listOf(rec.course.takeIf { it.isNotBlank() }, promptTail.takeIf { it.isNotBlank() })
                             .filterNotNull().joinToString(". ")
                         val t0 = System.currentTimeMillis()
-                        val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
+                        var raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
+                        if (isFinal && raw != null) {
+                            raw = crossCheck(raw, samples, window.pieces.sumOf { it.lenMs }, modelId, s.language, prompt.ifBlank { null }, s.threads)
+                        }
                         // Velocità misurata sull'audio originale coperto (silenzi saltati inclusi)
                         eta.record(window.endMs - chunkStartMs, System.currentTimeMillis() - t0)
                         speeds.put(modelId, eta.speed)

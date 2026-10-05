@@ -46,6 +46,9 @@ private fun selfTest(args: List<String>) {
     val lang = args.getOrElse(2) { "it" }
     val useVad = args.getOrElse(3) { "vad" } == "vad"
     val beam = args.getOrElse(4) { "1" }.toInt()
+    val backup = args.getOrNull(5)?.let { p -> WhisperEngine().also { check(it.ensureLoaded(p)) } }
+    var crossChecked = 0
+    var replaced = 0
     val packer = if (useVad) {
         val model = WhisperVad.extractModel(File(System.getProperty("java.io.tmpdir"), "rl-vad"))!!
         SpeechPacker(WhisperVad(model.absolutePath))
@@ -64,15 +67,26 @@ private fun selfTest(args: List<String>) {
             }
             val t = System.currentTimeMillis()
             if (!Chunker.isSilent(w.samples)) {
-                engine.transcribe(w.samples, lang, null, threads, beam)!!
-                    .forEach { s -> TextCleaner.clean(s.text)?.let { println("[${w.toSourceMs(s.startMs) / 1000}s] $it") } }
+                var raw = engine.transcribe(w.samples, lang, null, threads, beam)!!
+                if (backup != null) {
+                    val speech = w.pieces.sumOf { it.lenMs }
+                    val first = it.registratoreai.transcription.QualityCheck.evaluate(raw.map { it.text }, speech)
+                    if (first.suspicious) {
+                        crossChecked++
+                        val alt = backup.transcribe(w.samples, lang, null, threads, 5)!!
+                        val second = it.registratoreai.transcription.QualityCheck.evaluate(alt.map { it.text }, speech)
+                        System.err.println("sospetto (${first.reason}) a ${w.toSourceMs(0) / 1000}s -> seconda opinione ${if (second.suspicious) "anch'essa sospetta" else "ok"}")
+                        if (it.registratoreai.transcription.QualityCheck.secondIsBetter(first, second)) { raw = alt; replaced++ }
+                    }
+                }
+                raw.forEach { s -> TextCleaner.clean(s.text)?.let { println("[${w.toSourceMs(s.startMs) / 1000}s] $it") } }
             }
             whisperMs += System.currentTimeMillis() - t
             windows++
             offset = w.endMs
         }
     }
-    println("SELFTEST OK modalità=${if (useVad) "vad" else "plain"} beam=$beam finestre=$windows whisper=${whisperMs} ms totale=${System.currentTimeMillis() - t0} ms")
+    println("SELFTEST OK modalità=${if (useVad) "vad" else "plain"} beam=$beam verificate=$crossChecked sostituite=$replaced finestre=$windows whisper=${whisperMs} ms totale=${System.currentTimeMillis() - t0} ms")
 }
 
 /** Verifica del riassunto: `--summarize modello.gguf trascrizione.txt` (righe "[123s] testo"). */

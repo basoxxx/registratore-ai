@@ -10,6 +10,8 @@ import it.registratoreai.summary.SUMMARY_MODELS
 import it.registratoreai.summary.Summarizer
 import it.registratoreai.transcription.CUSTOM_MODEL_ID
 import it.registratoreai.transcription.Chunker
+import it.registratoreai.transcription.QualityCheck
+import it.registratoreai.transcription.crossCheckModelFor
 import it.registratoreai.transcription.modelById
 import it.registratoreai.transcription.EtaEstimator
 import it.registratoreai.transcription.beamSizeFor
@@ -56,6 +58,8 @@ class DesktopApp {
     val summaryProgress = MutableStateFlow<Pair<String, Float>?>(null)
     private val summaryQueue = ArrayDeque<String>()
     private val engine by lazy { WhisperEngine() }
+    /** Secondo modello per la verifica incrociata dei tratti sospetti. */
+    private val backupEngine by lazy { WhisperEngine() }
 
     private val _settings = MutableStateFlow(DesktopSettings.load())
     val settings = _settings.asStateFlow()
@@ -281,6 +285,7 @@ class DesktopApp {
         mutate(id) { it.copy(summaryStatus = TxStatus.RUNNING) }
         summaryProgress.value = id to 0f
         engine.release() // libera la memoria di Whisper
+        backupEngine.release()
         try {
             Summarizer(path, _settings.value.threads).use { s ->
                 val text = s.summarize(l.info(), l.segments) { p -> summaryProgress.value = id to p }
@@ -430,7 +435,17 @@ class DesktopApp {
                 if (!Chunker.isSilent(samples)) {
                     val prompt = listOf(lesson.course, promptTail).filter { it.isNotBlank() }.joinToString(". ")
                     val t0 = System.currentTimeMillis()
-                    val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
+                    var raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
+                    if (isFinal && raw != null) {
+                        // Tratto sospetto (ripetizioni, troppo poco testo…): seconda opinione dall'altro modello grande
+                        val speech = window.pieces.sumOf { it.lenMs }
+                        val first = QualityCheck.evaluate(raw.map { it.text }, speech)
+                        val otherPath = if (first.suspicious) crossCheckModelFor(modelId)?.let { models.pathFor(it) } else null
+                        if (otherPath != null && backupEngine.ensureLoaded(otherPath)) {
+                            val alt = backupEngine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, 5)
+                            if (alt != null && QualityCheck.secondIsBetter(first, QualityCheck.evaluate(alt.map { it.text }, speech))) raw = alt
+                        }
+                    }
                     eta.record(window.endMs - chunkStart, System.currentTimeMillis() - t0)
                     speeds.put(modelId, eta.speed)
                     speed.value = eta.speed

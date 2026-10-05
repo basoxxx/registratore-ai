@@ -25,12 +25,21 @@ foreach (cfg "" _RELEASE _DEBUG _RELWITHDEBINFO _MINSIZEREL)
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY${cfg} ${OUT_DIR})
 endforeach ()
 
-if (APPLE)
+if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
     # Mac Apple Silicon: libreria unica, GPU Metal (shader incorporati) e CPU con dotprod/fp16
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     set(GGML_METAL ON CACHE BOOL "" FORCE)
     set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
     set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
+elseif (APPLE)
+    # Mac Intel: libreria unica, solo CPU (Metal sulle GPU Intel/AMD non conviene).
+    # Tutti i Mac Intel che supportano macOS 12+ hanno AVX2/FMA/F16C.
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(GGML_METAL OFF CACHE BOOL "" FORCE)
+    set(GGML_AVX ON CACHE BOOL "" FORCE)
+    set(GGML_AVX2 ON CACHE BOOL "" FORCE)
+    set(GGML_FMA ON CACHE BOOL "" FORCE)
+    set(GGML_F16C ON CACHE BOOL "" FORCE)
 else ()
     # Windows / Linux: backend CPU in più varianti (SSE4.2, AVX, AVX2, AVX-512, ...);
     # all'avvio viene caricata la più veloce supportata dal processore.

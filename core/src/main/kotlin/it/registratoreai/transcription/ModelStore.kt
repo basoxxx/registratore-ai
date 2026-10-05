@@ -95,6 +95,17 @@ fun modelById(id: String): WhisperModel = canonicalModelId(id).let { c -> MODELS
  */
 fun beamSizeFor(id: String): Int = canonicalModelId(id).let { if (it.startsWith("large") || it == CUSTOM_MODEL_ID) 5 else 1 }
 
+/**
+ * Seconda opinione per la verifica incrociata dei tratti sospetti (vedi [QualityCheck]):
+ * Large v3 e Large v3 Turbo sbagliano in punti diversi, quindi si controllano a vicenda.
+ */
+fun crossCheckModelFor(id: String): String? = when (canonicalModelId(id)) {
+    "large-v3-q8_0" -> "large-v3-turbo-q8_0"
+    "large-v3-turbo-q8_0" -> "large-v3-q8_0"
+    CUSTOM_MODEL_ID -> "large-v3-q8_0"
+    else -> null
+}
+
 /** I modelli Whisper ggml iniziano con la "magic" 0x67676d6c ("lmgg" su disco). */
 fun isWhisperModelHeader(head: ByteArray) = head.size >= 4 && String(head, 0, 4, Charsets.ISO_8859_1) == "lmgg"
 

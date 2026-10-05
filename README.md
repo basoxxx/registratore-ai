@@ -50,7 +50,8 @@ Requisiti: Android 8.0+, telefono a 64 bit (arm64).
 
 Dalla stessa pagina Releases:
 
-- **macOS** (Apple Silicon M1 e successivi): `RegistratoreLezioni-macOS.dmg`. Trascina l'app in
+- **macOS** Apple Silicon (M1 e successivi): `RegistratoreLezioni-macOS.dmg`;
+  **Mac Intel**: `RegistratoreLezioni-macOS-Intel.dmg` (solo CPU, più lento). Trascina l'app in
   Applicazioni. Non è firmata da Apple: al primo avvio, se viene bloccata, vai in
   *Impostazioni di Sistema → Privacy e sicurezza → Apri comunque*. Usa la GPU (Metal).
 - **Windows 10/11** a 64 bit: `RegistratoreLezioni-Windows.msi` (installazione per utente).
