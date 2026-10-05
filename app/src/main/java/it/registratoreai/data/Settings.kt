@@ -2,6 +2,7 @@ package it.registratoreai.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import it.registratoreai.transcription.canonicalModelId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +33,7 @@ class Settings(context: Context) {
     val current: AppSettings get() = _state.value
 
     private fun read() = AppSettings(
-        modelId = prefs.getString("modelId", "base-q5_1")!!,
+        modelId = canonicalModelId(prefs.getString("modelId", "base-q5_1")!!),
         language = prefs.getString("language", "it")!!,
         liveTranscription = prefs.getBoolean("live", true),
         autoTranscribe = prefs.getBoolean("autoTranscribe", true),

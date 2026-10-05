@@ -7,6 +7,8 @@ import it.registratoreai.audio.samplesToMs
 import it.registratoreai.text.TextSegment
 import it.registratoreai.transcription.Chunker
 import it.registratoreai.transcription.EtaEstimator
+import it.registratoreai.transcription.SpeechPacker
+import it.registratoreai.transcription.WhisperVad
 import it.registratoreai.transcription.SpeedStore
 import it.registratoreai.transcription.ModelStore
 import it.registratoreai.transcription.TextCleaner
@@ -59,6 +61,13 @@ class DesktopApp {
     val speed = MutableStateFlow<Float?>(null)
     private val speeds = SpeedStore(File(Paths.dataDir, "speed.properties"))
     private var eta = EtaEstimator()
+    private var vadInstance: WhisperVad? = null
+
+    private fun vad(): WhisperVad? {
+        vadInstance?.let { return it }
+        val model = WhisperVad.extractModel(File(Paths.dataDir, "vad")) ?: return null
+        return WhisperVad(model.absolutePath).takeIf { it.ok }?.also { vadInstance = it }
+    }
 
     fun speedFor(modelId: String): Float? = speed.value ?: speeds.get(modelId)
 
@@ -271,6 +280,8 @@ class DesktopApp {
 
         eta = EtaEstimator(speeds.get(s.modelId))
         speed.value = eta.speed
+        // Dopo la lezione: VAD + impacchettamento del parlato (vedi SpeechPacker)
+        val packer = vad()?.let { SpeechPacker(it) } ?: SpeechPacker { null }
         var offsetMs = start.transcribedUntilMs
         var segments = lesson.segments.filter { it.startMs < offsetMs }
         var promptTail = segments.takeLast(6).joinToString(" ") { it.text }.takeLast(200)
@@ -280,8 +291,14 @@ class DesktopApp {
             while (true) {
                 coroutineContext.ensureActive()
                 val live = recording.value?.lessonId == id
-                val samples = when (val c = Chunker.nextChunk(reader, offsetMs, live)) {
-                    is Chunker.Chunk.Audio -> c.samples
+                val window = when (val c = packer.next(reader, offsetMs, live)) {
+                    is Chunker.Chunk.Audio -> c.window
+                    is Chunker.Chunk.Skip -> {
+                        offsetMs = c.endMs
+                        val until = offsetMs
+                        lesson = mutate(id) { it.copy(transcribedUntilMs = until) } ?: return
+                        continue
+                    }
                     Chunker.Chunk.End -> break
                     Chunker.Chunk.Wait -> {
                         progress.value = progressOf(id, offsetMs, samplesToMs(reader.availableSamples()))
@@ -289,13 +306,13 @@ class DesktopApp {
                         continue
                     }
                 }
+                val samples = window.samples
                 val chunkStart = offsetMs
-                val lenMs = samplesToMs(samples.size.toLong())
                 if (AudioMath.rms(samples) > Chunker.SILENCE_RMS) {
                     val prompt = listOf(lesson.course, promptTail).filter { it.isNotBlank() }.joinToString(". ")
                     val t0 = System.currentTimeMillis()
                     val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads)
-                    eta.record(lenMs, System.currentTimeMillis() - t0)
+                    eta.record(window.endMs - chunkStart, System.currentTimeMillis() - t0)
                     speeds.put(s.modelId, eta.speed)
                     speed.value = eta.speed
                     coroutineContext.ensureActive()
@@ -305,12 +322,12 @@ class DesktopApp {
                         val text = TextCleaner.clean(r.text) ?: continue
                         if (lastText != null && text.equals(lastText, ignoreCase = true)) continue
                         lastText = text
-                        fresh += TextSegment(chunkStart + r.startMs.coerceIn(0, lenMs), chunkStart + r.endMs.coerceIn(0, lenMs), text)
+                        fresh += TextSegment(window.toSourceMs(r.startMs), window.toSourceMs(r.endMs), text)
                     }
                     segments = segments + fresh
                     if (fresh.isNotEmpty()) promptTail = (promptTail + " " + fresh.joinToString(" ") { it.text }).takeLast(200)
                 }
-                offsetMs += lenMs
+                offsetMs = window.endMs
                 val segs = segments
                 val until = offsetMs
                 lesson = mutate(id) { it.copy(segments = segs, transcribedUntilMs = until) } ?: return

@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include "whisper.h"
+#include "ggml-backend.h"
 
 #define TAG "WhisperJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -24,14 +25,42 @@ static bool abort_cb(void * /*user_data*/) { return g_abort.load(); }
 
 extern "C" {
 
+/**
+ * Carica i backend di calcolo dalla cartella indicata. Con le build "a varianti"
+ * (Android, Windows, Linux) ggml sceglie qui la libreria CPU più veloce supportata
+ * dal processore (es. ARMv8.2 dotprod/fp16, ARMv8.6 i8mm, AVX2, AVX-512...).
+ */
+JNIEXPORT void JNICALL
+Java_it_registratoreai_transcription_WhisperLib_initBackends(JNIEnv *env, jobject, jstring dir) {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    const char *d = dir ? env->GetStringUTFChars(dir, nullptr) : nullptr;
+    ggml_backend_load_all_from_path(d);
+    if (d) env->ReleaseStringUTFChars(dir, d);
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        LOGI("Backend disponibile: %s", ggml_backend_dev_description(ggml_backend_dev_get(i)));
+    }
+}
+
 JNIEXPORT jlong JNICALL
 Java_it_registratoreai_transcription_WhisperLib_initContext(JNIEnv *env, jobject, jstring modelPath) {
+    if (ggml_backend_dev_count() == 0) {
+        // Nessun backend caricato (cartella sbagliata?): ultimo tentativo con i percorsi predefiniti
+        ggml_backend_load_all();
+        if (ggml_backend_dev_count() == 0) {
+            LOGE("Nessun backend di calcolo disponibile");
+            return 0;
+        }
+    }
     const char *path = env->GetStringUTFChars(modelPath, nullptr);
     whisper_context_params cparams = whisper_context_default_params();
 #if defined(__APPLE__) && !defined(__ANDROID__)
-    cparams.use_gpu = true;   // Metal sui Mac
+    cparams.use_gpu = true;     // Metal sui Mac
+    cparams.flash_attn = true;  // più veloce su GPU (su CPU invece rallenta: misurato -20%)
 #else
     cparams.use_gpu = false;
+    cparams.flash_attn = false;
 #endif
     whisper_context *ctx = whisper_init_from_file_with_params(path, cparams);
     if (!ctx) LOGE("Impossibile caricare il modello %s", path);
@@ -122,6 +151,61 @@ Java_it_registratoreai_transcription_WhisperLib_segmentText(JNIEnv *env, jobject
     jsize len = txt ? (jsize) strlen(txt) : 0;
     jbyteArray arr = env->NewByteArray(len);
     if (len > 0) env->SetByteArrayRegion(arr, 0, len, reinterpret_cast<const jbyte *>(txt));
+    return arr;
+}
+
+// ---------------------------------------------------------------- VAD (rilevamento del parlato)
+
+JNIEXPORT jlong JNICALL
+Java_it_registratoreai_transcription_WhisperLib_vadInit(JNIEnv *env, jobject, jstring modelPath, jint threads) {
+    const char *path = env->GetStringUTFChars(modelPath, nullptr);
+    whisper_vad_context_params p = whisper_vad_default_context_params();
+    p.n_threads = threads;
+    p.use_gpu = false;
+    whisper_vad_context *v = whisper_vad_init_from_file_with_params(path, p);
+    if (!v) LOGE("Impossibile caricare il modello VAD %s", path);
+    env->ReleaseStringUTFChars(modelPath, path);
+    return reinterpret_cast<jlong>(v);
+}
+
+JNIEXPORT void JNICALL
+Java_it_registratoreai_transcription_WhisperLib_vadFree(JNIEnv *, jobject, jlong ptr) {
+    auto *v = reinterpret_cast<whisper_vad_context *>(ptr);
+    if (v) whisper_vad_free(v);
+}
+
+/**
+ * Restituisce gli intervalli di parlato come array piatto [inizio, fine, inizio, fine, ...]
+ * in millisecondi relativi all'inizio di [samples]; null in caso di errore.
+ */
+JNIEXPORT jlongArray JNICALL
+Java_it_registratoreai_transcription_WhisperLib_vadSegments(JNIEnv *env, jobject, jlong ptr, jfloatArray samples,
+                                                            jfloat threshold, jint minSpeechMs, jint minSilenceMs,
+                                                            jfloat maxSpeechS, jint padMs) {
+    auto *v = reinterpret_cast<whisper_vad_context *>(ptr);
+    if (!v) return nullptr;
+    jsize n = env->GetArrayLength(samples);
+    std::vector<float> pcm(n);
+    env->GetFloatArrayRegion(samples, 0, n, pcm.data());
+
+    whisper_vad_params vp = whisper_vad_default_params();
+    vp.threshold = threshold;
+    vp.min_speech_duration_ms = minSpeechMs;
+    vp.min_silence_duration_ms = minSilenceMs;
+    vp.max_speech_duration_s = maxSpeechS;
+    vp.speech_pad_ms = padMs;
+    whisper_vad_segments *segs = whisper_vad_segments_from_samples(v, vp, pcm.data(), n);
+    if (!segs) return nullptr;
+    int count = whisper_vad_segments_n_segments(segs);
+    std::vector<jlong> out(count * 2);
+    for (int i = 0; i < count; ++i) {
+        // whisper restituisce centesimi di secondo
+        out[i * 2] = (jlong) (whisper_vad_segments_get_segment_t0(segs, i) * 10.0f);
+        out[i * 2 + 1] = (jlong) (whisper_vad_segments_get_segment_t1(segs, i) * 10.0f);
+    }
+    whisper_vad_free_segments(segs);
+    jlongArray arr = env->NewLongArray(count * 2);
+    if (count > 0) env->SetLongArrayRegion(arr, 0, count * 2, out.data());
     return arr;
 }
 

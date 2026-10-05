@@ -12,6 +12,7 @@ import it.registratoreai.transcription.ModelManager
 import it.registratoreai.transcription.Transcriber
 import it.registratoreai.transcription.WhisperEngine
 import it.registratoreai.transcription.WhisperLib
+import it.registratoreai.transcription.WhisperNative
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +30,8 @@ class RegistratoreApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // ggml sceglie la variante CPU più veloce tra le librerie estratte qui
+        WhisperNative.backendsDir = applicationInfo.nativeLibraryDir
         db = AppDatabase.create(this)
         settings = Settings(this)
         models = ModelManager(this)

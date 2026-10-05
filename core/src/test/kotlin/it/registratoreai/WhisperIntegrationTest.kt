@@ -31,6 +31,8 @@ class WhisperIntegrationTest {
         val wav = File.createTempFile("lezione", ".wav")
         WavWriter(wav).use { it.write(samples, samples.size) }
 
+        // Le varianti del backend CPU stanno accanto a libwhisper_jni
+        it.registratoreai.transcription.WhisperNative.backendsDir = System.getenv("WHISPER_JNI_DIR")
         val engine = WhisperEngine()
         assertTrue(engine.ensureLoaded(model!!))
         val out = StringBuilder()

@@ -10,3 +10,4 @@ captures/
 build-native/
 desktop/resources/*/
 !desktop/resources/common/
+hs_err_pid*.log
