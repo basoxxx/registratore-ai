@@ -20,6 +20,11 @@ App per **Android, macOS e Windows** per **registrare le lezioni universitarie**
     migliorare la precisione; le tipiche "allucinazioni" di Whisper sul silenzio vengono filtrate.
 - **Trascrizione in due passaggi**: durante la lezione un modello leggero mostra l'anteprima; appena
   finisce, Large v3 Turbo (Q8_0 + beam search) ritrascrive tutto e sostituisce il testo man mano.
+- **⭐ Momenti segnati**: durante la lezione (anche dalla notifica, a schermo spento) un tocco su ⭐
+  segna il passaggio appena sentito; i momenti compaiono nella trascrizione, nel file Markdown e il
+  riassunto li mette tra i punti chiave.
+- **Parole chiave del corso**: per ogni corso puoi scrivere termini tecnici, nomi di autori e sigle;
+  Whisper li usa come contesto e li scrive correttamente (anche nel riassunto).
 - **Riassunto automatico con IA locale** (llama.cpp + Qwen3, offline): "In breve", punti chiave,
   definizioni, cose da fare e scaletta della lezione con i minutaggi; incluso nel file Markdown.
 - **Lavoro in standby (a scelta)**: su telefono/tablet trascrizione e riassunto continuano a
@@ -59,7 +64,8 @@ Dalla stessa pagina Releases:
 
 Le lezioni vengono salvate in `Documenti/Registratore Lezioni`, una cartella per lezione con
 `audio.wav`, `lezione.json` e il file `.md` sempre aggiornato durante la trascrizione.
-Sul computer si possono importare file WAV/AIFF.
+Sul computer si possono importare audio e video (mp3, m4a, aac, wav, flac, mp4, mov… anche le
+registrazioni di Teams/Zoom), letti con i decoder del sistema operativo.
 
 ## Quale modello scegliere
 

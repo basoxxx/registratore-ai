@@ -4,7 +4,9 @@ import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
+import it.registratoreai.text.Bookmarks
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -17,6 +19,15 @@ interface RecordingDao {
 
     @Query("SELECT * FROM recordings WHERE id = :id")
     suspend fun get(id: Long): Recording?
+
+    @Query("SELECT bookmarks FROM recordings WHERE id = :id")
+    suspend fun bookmarks(id: Long): String?
+
+    @Query("UPDATE recordings SET bookmarks = :value WHERE id = :id")
+    suspend fun setBookmarks(id: Long, value: String)
+
+    @Transaction
+    suspend fun addBookmark(id: Long, elapsedMs: Long) = setBookmarks(id, Bookmarks.add(bookmarks(id), elapsedMs))
 
     @Insert
     suspend fun insert(recording: Recording): Long

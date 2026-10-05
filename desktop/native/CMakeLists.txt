@@ -61,8 +61,23 @@ set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
 add_subdirectory(${REPO_ROOT}/third_party/llama.cpp llama_build)
 
+# Decodifica di mp3/m4a/mp4/… : AVFoundation su macOS, Media Foundation su Windows
+if (APPLE)
+    # compilato come C++ in modalità Objective-C++ (enable_language(OBJCXX) qui non funziona)
+    set(AUDIO_DECODE ${REPO_ROOT}/app/src/main/cpp/audio_decode_mac.mm)
+    set_source_files_properties(${AUDIO_DECODE} PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++ -fobjc-arc")
+else ()
+    set(AUDIO_DECODE ${REPO_ROOT}/app/src/main/cpp/audio_decode.cpp)
+endif ()
+
 add_library(whisper_jni SHARED
     ${REPO_ROOT}/app/src/main/cpp/whisper_jni.cpp
-    ${REPO_ROOT}/app/src/main/cpp/llama_jni.cpp)
+    ${REPO_ROOT}/app/src/main/cpp/llama_jni.cpp
+    ${AUDIO_DECODE})
 target_include_directories(whisper_jni PRIVATE ${JNI_INCLUDE_DIRS} ${REPO_ROOT}/third_party/llama.cpp/include)
 target_link_libraries(whisper_jni PRIVATE whisper llama ggml)
+if (APPLE)
+    target_link_libraries(whisper_jni PRIVATE "-framework AVFoundation" "-framework CoreMedia" "-framework Foundation")
+elseif (WIN32)
+    target_link_libraries(whisper_jni PRIVATE mfplat mfreadwrite mfuuid ole32)
+endif ()

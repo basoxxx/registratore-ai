@@ -3,6 +3,7 @@ package it.registratoreai.data
 import android.content.Context
 import android.content.SharedPreferences
 import it.registratoreai.transcription.FINAL_MODEL_ID
+import it.registratoreai.transcription.WhisperPrompt
 import it.registratoreai.transcription.canonicalModelId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -90,6 +91,18 @@ class Settings(context: Context) {
         val mi = android.app.ActivityManager.MemoryInfo()
         appContext.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(mi)
         return if (mi.totalMem >= 5_500_000_000L) "qwen3-4b-q4_k_m" else "qwen3-1.7b-q4_k_m"
+    }
+
+    private val glossaries: SharedPreferences =
+        context.getSharedPreferences("glossary", Context.MODE_PRIVATE)
+
+    /** Parole chiave del corso (termini tecnici, nomi) usate come contesto da Whisper. */
+    fun glossary(course: String): String =
+        if (course.isBlank()) "" else glossaries.getString(WhisperPrompt.courseKey(course), "")!!
+
+    fun setGlossary(course: String, text: String) {
+        if (course.isBlank()) return
+        glossaries.edit().putString(WhisperPrompt.courseKey(course), text.trim()).apply()
     }
 
     var lastUpdateCheck: Long

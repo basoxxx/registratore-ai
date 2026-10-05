@@ -1,6 +1,7 @@
 package it.registratoreai
 
 import it.registratoreai.audio.AudioMath
+import it.registratoreai.audio.Resampler
 import it.registratoreai.audio.SAMPLE_RATE
 import it.registratoreai.audio.WAV_HEADER_SIZE
 import it.registratoreai.audio.WavReader
@@ -98,5 +99,29 @@ class AudioTest {
             assertTrue(Chunker.nextChunk(r, total, live = false) is Chunker.Chunk.End)
         }
         w.close()
+    }
+
+    private fun rmsOf(x: FloatArray, from: Int) =
+        kotlin.math.sqrt(x.drop(from).sumOf { (it * it).toDouble() } / (x.size - from))
+
+    @Test
+    fun resamplerKeepsSpeechAndRemovesAliasing() {
+        val rate = 48_000
+        fun at(freq: Double) = FloatArray(rate * 2) { (sin(2 * PI * freq * it / rate) * 10_000).toFloat() }
+        // a blocchi di 100 ms, come durante la registrazione
+        fun resample(x: FloatArray): FloatArray {
+            val r = Resampler()
+            return x.toList().chunked(rate / 10).map { r.process(it.toFloatArray(), rate) }
+                .fold(FloatArray(0)) { a, b -> a + b }
+        }
+        val speech = resample(at(1_000.0))
+        assertTrue(kotlin.math.abs(speech.size - 2 * SAMPLE_RATE) <= 2)
+        assertEquals(10_000 / kotlin.math.sqrt(2.0), rmsOf(speech, 1000), 300.0)
+        // 12 kHz a 48 kHz si ripiegherebbe a 4 kHz: deve sparire
+        assertTrue(rmsOf(resample(at(12_000.0)), 1000) < 50)
+        // a blocchi o tutto insieme: stesso risultato
+        val whole = Resampler().process(at(1_000.0), rate)
+        assertEquals(whole.size, speech.size)
+        for (i in whole.indices) assertEquals(whole[i], speech[i], 0.5f)
     }
 }

@@ -1,5 +1,6 @@
 package it.registratoreai.desktop
 
+import it.registratoreai.text.Bookmarks
 import it.registratoreai.audio.AudioMath
 import it.registratoreai.audio.WavReader
 import it.registratoreai.audio.WavWriter
@@ -19,6 +20,8 @@ import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.SpeechPacker
 import it.registratoreai.transcription.WhisperVad
 import it.registratoreai.transcription.SpeedStore
+import it.registratoreai.transcription.GlossaryStore
+import it.registratoreai.transcription.WhisperPrompt
 import it.registratoreai.transcription.ModelStore
 import it.registratoreai.transcription.TextCleaner
 import it.registratoreai.transcription.WhisperEngine
@@ -75,6 +78,8 @@ class DesktopApp {
     /** Velocità di trascrizione misurata (ms di audio per ms di calcolo), per i tempi stimati. */
     val speed = MutableStateFlow<Float?>(null)
     private val speeds = SpeedStore(File(Paths.dataDir, "speed.properties"))
+    /** Parole chiave di ogni corso, usate come contesto da Whisper. */
+    val glossaries = GlossaryStore(File(Paths.dataDir, "glossary.properties"))
     private var eta = EtaEstimator()
     private var vadInstance: WhisperVad? = null
 
@@ -180,6 +185,16 @@ class DesktopApp {
         return lesson.id
     }
 
+    /** "⭐ Segna": ricorda il momento attuale della registrazione (dagli ultimi 10 secondi). */
+    fun addBookmark() {
+        val live = recording.value ?: return
+        mutate(live.lessonId) { it.copy(bookmarks = Bookmarks.parse(Bookmarks.add(Bookmarks.format(it.bookmarks), live.elapsedMs))) }
+    }
+
+    fun removeBookmark(id: String, ms: Long) {
+        mutate(id) { it.copy(bookmarks = it.bookmarks - ms) }
+    }
+
     fun setPaused(paused: Boolean) {
         recorder?.paused = paused
         recording.update { it?.copy(paused = paused, level = 0f) }
@@ -204,19 +219,26 @@ class DesktopApp {
 
     // ------------------------------------------------------------------ Import / modifica
 
-    fun importAudio(file: File): String? = try {
+    fun importAudio(file: File): String? {
         val now = System.currentTimeMillis()
         val title = file.nameWithoutExtension
         val dir = store.newLessonDir(title, now).apply { mkdirs() }
+        return try {
+            importInto(dir, file, title, now)
+        } catch (e: Exception) {
+            dir.deleteRecursively()
+            messages.value = "Impossibile leggere ${file.name}: formato non supportato (${e.message})"
+            null
+        }
+    }
+
+    private fun importInto(dir: File, file: File, title: String, now: Long): String {
         val ms = AudioImport.toWav16k(file, File(dir, "audio.wav"))
         val lesson = Lesson(dir = dir, title = title, createdAt = now, durationMs = ms)
         store.save(lesson, _settings.value.timestamps)
         _lessons.update { listOf(lesson) + it }
         if (models.isInstalled(_settings.value.modelId) || models.isInstalled(_settings.value.finalModelId)) transcribe(lesson.id, restart = false)
-        lesson.id
-    } catch (e: Exception) {
-        messages.value = "Formato non supportato: importa un file WAV o AIFF (${e.message})"
-        null
+        return lesson.id
     }
 
     fun rename(id: String, title: String, course: String) {
@@ -288,7 +310,7 @@ class DesktopApp {
         backupEngine.release()
         try {
             Summarizer(path, _settings.value.threads).use { s ->
-                val text = s.summarize(l.info(), l.segments) { p -> summaryProgress.value = id to p }
+                val text = s.summarize(l.info(), l.segments, glossaries.get(l.course), l.bookmarks) { p -> summaryProgress.value = id to p }
                 mutate(id) { it.copy(summary = text, summaryStatus = TxStatus.DONE) }
             }
         } catch (e: CancellationException) {
@@ -433,7 +455,7 @@ class DesktopApp {
                 val samples = window.samples
                 val chunkStart = offsetMs
                 if (!Chunker.isSilent(samples)) {
-                    val prompt = listOf(lesson.course, promptTail).filter { it.isNotBlank() }.joinToString(". ")
+                    val prompt = WhisperPrompt.build(lesson.course, glossaries.get(lesson.course), promptTail) ?: ""
                     val t0 = System.currentTimeMillis()
                     var raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
                     if (isFinal && raw != null) {

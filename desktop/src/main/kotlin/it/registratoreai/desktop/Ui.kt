@@ -1,5 +1,9 @@
 package it.registratoreai.desktop
 
+import androidx.compose.material3.InputChip
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -83,6 +87,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import it.registratoreai.transcription.GlossaryStore
 import it.registratoreai.text.ExportFormat
 import it.registratoreai.text.TranscriptFormatter
 import it.registratoreai.text.formatDate
@@ -184,7 +189,12 @@ private fun Sidebar(app: DesktopApp, frame: Frame, selected: String?, onSelect: 
                             onClick = { scope.launch(Dispatchers.IO) { app.stopRecording() } },
                             colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.error),
                         ) { Icon(Icons.Default.Stop, "Stop") }
-                        Text("Stop salva la lezione", style = MaterialTheme.typography.bodySmall)
+                        FilledTonalIconButton(onClick = { app.addBookmark() }, enabled = !l.paused) {
+                            Icon(Icons.Default.Star, "Segna questo momento")
+                        }
+                        val marks = lessons.firstOrNull { it.id == l.lessonId }?.bookmarks?.size ?: 0
+                        Text(if (marks == 0) "⭐ segna un momento importante" else "⭐ $marks segnat${if (marks == 1) "o" else "i"}",
+                            style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -269,7 +279,7 @@ private fun Sidebar(app: DesktopApp, frame: Frame, selected: String?, onSelect: 
         HorizontalDivider()
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = {
-                chooseFile(frame, "Importa audio (WAV/AIFF)")?.let { f ->
+                chooseFile(frame, "Importa audio o video (mp3, m4a, wav, mp4…)")?.let { f ->
                     scope.launch(Dispatchers.IO) { app.importAudio(f)?.let { onSelect(Pane.Detail(it)) } }
                 }
             }) { Icon(Icons.Default.FileOpen, null); Spacer(Modifier.width(4.dp)); Text("Importa") }
@@ -282,6 +292,7 @@ private fun Sidebar(app: DesktopApp, frame: Frame, selected: String?, onSelect: 
     if (showNew) {
         NewRecordingDialog(
             courses = lessons.map { it.course }.filter { it.isNotBlank() }.distinct().take(6),
+            glossaries = app.glossaries,
             onDismiss = { showNew = false },
             onStart = { title, course ->
                 showNew = false
@@ -302,10 +313,13 @@ private fun statusLabel(l: Lesson, p: TxProgress?, queued: Boolean): String = wh
 }
 
 @Composable
-private fun NewRecordingDialog(courses: List<String>, onDismiss: () -> Unit, onStart: (String, String) -> Unit) {
+private fun NewRecordingDialog(
+    courses: List<String>, glossaries: GlossaryStore, onDismiss: () -> Unit, onStart: (String, String) -> Unit,
+) {
     val defaultTitle = remember { "Lezione del " + SimpleDateFormat("d MMMM yyyy", Locale.ITALY).format(Date()) }
     var title by remember { mutableStateOf(defaultTitle) }
     var course by remember { mutableStateOf(courses.firstOrNull() ?: "") }
+    var glossary by remember(course) { mutableStateOf(glossaries.get(course)) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Nuova registrazione") },
@@ -319,14 +333,29 @@ private fun NewRecordingDialog(courses: List<String>, onDismiss: () -> Unit, onS
                         Text(c, Modifier.fillMaxWidth().clickable { course = c }.padding(vertical = 3.dp), color = MaterialTheme.colorScheme.primary)
                     }
                 }
+                if (course.isNotBlank()) GlossaryField(glossary) { glossary = it }
             }
         },
         confirmButton = {
-            Button(onClick = { onStart(title.ifBlank { defaultTitle }, course.trim()) }) {
+            Button(onClick = {
+                glossaries.set(course, glossary)
+                onStart(title.ifBlank { defaultTitle }, course.trim())
+            }) {
                 Icon(Icons.Default.Mic, null); Spacer(Modifier.width(6.dp)); Text("Inizia")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annulla") } },
+    )
+}
+
+/** Parole chiave del corso: Whisper le usa come contesto e le scrive correttamente. */
+@Composable
+private fun GlossaryField(value: String, enabled: Boolean = true, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value, onChange, enabled = enabled, minLines = 2, maxLines = 4, modifier = Modifier.width(420.dp),
+        label = { Text("Parole chiave del corso") },
+        placeholder = { Text("es. teorema di Bayes, eteroschedasticità, Keynes") },
+        supportingText = { Text(if (enabled) "Termini tecnici e nomi separati da virgole: verranno trascritti correttamente" else "Indica prima il corso") },
     )
 }
 
@@ -404,6 +433,7 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
 
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     LaunchedEffect(lesson.segments.size, lesson.recording) {
         if (lesson.recording && lesson.segments.isNotEmpty()) listState.animateScrollToItem(lesson.segments.size - 1)
@@ -428,7 +458,7 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
             }
             Action(Icons.Default.PlayArrow, "Ascolta") { open(lesson.audio) }
             Action(Icons.Default.Folder, "Cartella") { open(lesson.dir) }
-            Action(Icons.Default.Edit, "Rinomina") { renaming = true }
+            Action(Icons.Default.Edit, "Modifica") { renaming = true }
             Action(Icons.Default.Delete, "Elimina", enabled = !lesson.recording) { deleting = true }
         }
 
@@ -490,18 +520,42 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
 
         SummaryCard(app, lesson)
 
+        if (lesson.bookmarks.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Star, null, tint = MaterialTheme.colorScheme.tertiary)
+                lesson.bookmarks.forEach { ms ->
+                    InputChip(
+                        selected = false,
+                        onClick = {
+                            query = ""
+                            val idx = lesson.segments.indexOfLast { it.startMs <= ms }
+                            if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                        },
+                        label = { Text(formatTimestamp(ms)) },
+                        trailingIcon = {
+                            Icon(Icons.Default.Close, "Togli", Modifier.size(16.dp).clickable { app.removeBookmark(id, ms) })
+                        },
+                    )
+                }
+            }
+        }
+
         OutlinedTextField(
             query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
             leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Cerca nella trascrizione") },
         )
         Spacer(Modifier.height(8.dp))
         val visible = lesson.segments.filter { query.isBlank() || it.text.contains(query, true) }
+        val starred = lesson.bookmarks.mapNotNull { ms -> lesson.segments.lastOrNull { it.startMs <= ms } ?: lesson.segments.firstOrNull() }.toSet()
         SelectionContainer(Modifier.weight(1f)) {
             LazyColumn(state = listState, contentPadding = PaddingValues(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (lesson.segments.isEmpty() && lesson.status == TxStatus.DONE) item { Text("Nessun parlato riconosciuto.") }
                 items(visible) { s ->
                     Row {
-                        Text(formatTimestamp(s.startMs), Modifier.width(76.dp), style = MaterialTheme.typography.labelMedium,
+                        Text((if (s in starred) "⭐" else "") + formatTimestamp(s.startMs), Modifier.width(92.dp), style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary, fontFamily = FontFamily.Monospace)
                         Text(s.text, style = MaterialTheme.typography.bodyLarge)
                     }
@@ -513,16 +567,24 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
     if (renaming) {
         var title by remember { mutableStateOf(lesson.title) }
         var course by remember { mutableStateOf(lesson.course) }
+        var glossary by remember(course) { mutableStateOf(app.glossaries.get(course)) }
         AlertDialog(
             onDismissRequest = { renaming = false },
-            title = { Text("Rinomina") },
+            title = { Text("Modifica") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(title, { title = it }, label = { Text("Titolo") }, singleLine = true)
                     OutlinedTextField(course, { course = it }, label = { Text("Corso") }, singleLine = true)
+                    GlossaryField(glossary, enabled = course.isNotBlank()) { glossary = it }
                 }
             },
-            confirmButton = { Button(onClick = { renaming = false; app.rename(id, title.ifBlank { lesson.title }, course.trim()) }) { Text("Salva") } },
+            confirmButton = {
+                Button(onClick = {
+                    renaming = false
+                    app.glossaries.set(course, glossary)
+                    app.rename(id, title.ifBlank { lesson.title }, course.trim())
+                }) { Text("Salva") }
+            },
             dismissButton = { TextButton(onClick = { renaming = false }) { Text("Annulla") } },
         )
     }

@@ -17,6 +17,7 @@ import java.io.File
 fun main(args: Array<String>) {
     if (args.firstOrNull() == "--selftest") return selfTest(args.drop(1))
     if (args.firstOrNull() == "--summarize") return summarizeTest(args.drop(1))
+    if (args.firstOrNull() == "--decode") return decodeTest(args.drop(1))
     val app = DesktopApp()
     application {
         val state = rememberWindowState(size = DpSize(1180.dp, 760.dp))
@@ -67,7 +68,7 @@ private fun selfTest(args: List<String>) {
             }
             val t = System.currentTimeMillis()
             if (!Chunker.isSilent(w.samples)) {
-                var raw = engine.transcribe(w.samples, lang, null, threads, beam)!!
+                var raw = engine.transcribe(w.samples, lang, System.getenv("RL_PROMPT"), threads, beam)!!
                 if (backup != null) {
                     val speech = w.pieces.sumOf { it.lenMs }
                     val first = it.registratoreai.transcription.QualityCheck.evaluate(raw.map { it.text }, speech)
@@ -108,4 +109,12 @@ private fun summarizeTest(args: List<String>) {
         println(out)
     }
     println("SUMMARY OK ${(System.currentTimeMillis() - t0) / 1000} s")
+}
+
+/** Verifica dell'import: `--decode file…` stampa per ogni file durata (ms) e decoder usato. */
+private fun decodeTest(args: List<String>) {
+    check(Native.load()) { Native.error ?: "libreria non caricata" }
+    val out = File.createTempFile("decode", ".wav")
+    for (f in args) println("${File(f).name} ${AudioImport.toWav16k(File(f), out)} ${AudioImport.lastDecoder}")
+    out.delete()
 }

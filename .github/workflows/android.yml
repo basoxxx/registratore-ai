@@ -98,6 +98,12 @@ jobs:
           find build-native/out -maxdepth 1 \( -name "*.dll" -o -name "*.dylib" -o -name "*.so" \) -exec cp {} desktop/resources/${{ matrix.target }}/ \;
           ls -la desktop/resources/${{ matrix.target }}
 
+      - name: Verifica import mp3/m4a/mp4 con il decoder di sistema
+        run: |
+          ./gradlew -q :desktop:run --args="--decode testdata/tone.m4a testdata/tone.mp3 testdata/tone.mp4" | tee decode.txt
+          # ogni file: ~3 secondi decodificati da AVFoundation / Media Foundation
+          test "$(tr -d '\r' < decode.txt | awk '$2 > 2900 && $2 < 3200 && $3 == "sistema"' | wc -l)" -eq 3
+
       - name: Pacchetto macOS (.dmg)
         if: runner.os == 'macOS'
         run: |
