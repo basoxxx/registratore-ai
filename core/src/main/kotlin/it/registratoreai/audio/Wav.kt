@@ -108,6 +108,22 @@ class WavReader(private val file: File) : AutoCloseable {
 }
 
 object AudioMath {
+    /**
+     * Porta l'audio a un livello costante (voce lontana -> volume normale) senza saturare:
+     * guadagno limitato a +30 dB e calcolato sul 99,5° percentile del valore assoluto.
+     */
+    fun normalized(x: FloatArray, target: Float = 0.7f, maxGain: Float = 31.6f): FloatArray {
+        if (x.isEmpty()) return x
+        val step = maxOf(1, x.size / 20_000)
+        val sample = FloatArray((x.size + step - 1) / step) { kotlin.math.abs(x[minOf(it * step, x.size - 1)]) }
+        sample.sort()
+        val ref = sample[((sample.size - 1) * 0.995).toInt()]
+        if (ref <= 1e-6f) return x
+        val gain = (target / ref).coerceIn(1f, maxGain)
+        if (gain <= 1.05f) return x
+        return FloatArray(x.size) { (x[it] * gain).coerceIn(-1f, 1f) }
+    }
+
     fun rms(x: FloatArray, from: Int = 0, to: Int = x.size): Float {
         if (to <= from) return 0f
         var s = 0.0

@@ -22,7 +22,7 @@ object Native {
         return try {
             // Su Windows le DLL dipendenti non vengono cercate nella cartella della libreria:
             // le carichiamo esplicitamente nell'ordine giusto (se presenti).
-            for (dep in listOf("ggml-base", "ggml", "whisper")) {
+            for (dep in listOf("ggml-base", "ggml", "whisper", "llama")) {
                 val f = File(dir, System.mapLibraryName(dep))
                 if (f.isFile) System.load(f.absolutePath)
             }

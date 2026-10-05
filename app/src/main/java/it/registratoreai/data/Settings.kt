@@ -2,13 +2,23 @@ package it.registratoreai.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import it.registratoreai.transcription.FINAL_MODEL_ID
 import it.registratoreai.transcription.canonicalModelId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class AppSettings(
+    /** Modello per la trascrizione in tempo reale (anteprima). */
     val modelId: String,
+    /** Modello per la trascrizione finale dopo la lezione. */
+    val finalModelId: String,
+    /** Al termine della lezione ritrascrive tutto con il modello finale. */
+    val refineAfter: Boolean,
+    /** Genera il riassunto con l'IA locale quando la trascrizione è completa. */
+    val autoSummary: Boolean,
+    /** Modello linguistico per il riassunto. */
+    val summaryModelId: String,
     val language: String,
     /** Trascrive durante la registrazione (aggiornamenti in tempo reale). */
     val liveTranscription: Boolean,
@@ -25,6 +35,7 @@ data class AppSettings(
 )
 
 class Settings(context: Context) {
+    private val appContext = context.applicationContext
     private val prefs: SharedPreferences =
         context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
@@ -33,7 +44,11 @@ class Settings(context: Context) {
     val current: AppSettings get() = _state.value
 
     private fun read() = AppSettings(
-        modelId = canonicalModelId(prefs.getString("modelId", "base-q5_1")!!),
+        modelId = canonicalModelId(prefs.getString("modelId", "base-q8_0")!!),
+        finalModelId = canonicalModelId(prefs.getString("finalModelId", FINAL_MODEL_ID)!!),
+        refineAfter = prefs.getBoolean("refineAfter", true),
+        autoSummary = prefs.getBoolean("autoSummary", true),
+        summaryModelId = prefs.getString("summaryModelId", defaultSummaryModel())!!,
         language = prefs.getString("language", "it")!!,
         liveTranscription = prefs.getBoolean("live", true),
         autoTranscribe = prefs.getBoolean("autoTranscribe", true),
@@ -49,6 +64,10 @@ class Settings(context: Context) {
         val s = block(current)
         prefs.edit()
             .putString("modelId", s.modelId)
+            .putString("finalModelId", s.finalModelId)
+            .putBoolean("refineAfter", s.refineAfter)
+            .putBoolean("autoSummary", s.autoSummary)
+            .putString("summaryModelId", s.summaryModelId)
             .putString("language", s.language)
             .putBoolean("live", s.liveTranscription)
             .putBoolean("autoTranscribe", s.autoTranscribe)
@@ -60,6 +79,13 @@ class Settings(context: Context) {
             .putBoolean("checkUpdates", s.checkUpdates)
             .apply()
         _state.value = s
+    }
+
+    /** Qwen3 4B se il telefono ha almeno 6 GB di RAM, altrimenti il modello leggero. */
+    private fun defaultSummaryModel(): String {
+        val mi = android.app.ActivityManager.MemoryInfo()
+        appContext.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(mi)
+        return if (mi.totalMem >= 5_500_000_000L) "qwen3-4b-q4_k_m" else "qwen3-1.7b-q4_k_m"
     }
 
     var lastUpdateCheck: Long

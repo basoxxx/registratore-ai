@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -74,7 +75,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -85,7 +89,9 @@ import it.registratoreai.text.formatDate
 import it.registratoreai.text.formatDuration
 import it.registratoreai.text.formatShortDate
 import it.registratoreai.text.formatTimestamp
+import it.registratoreai.summary.SUMMARY_MODELS
 import it.registratoreai.transcription.MODELS
+import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.formatEta
 import it.registratoreai.transcription.modelById
 import kotlinx.coroutines.Dispatchers
@@ -438,7 +444,11 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
                         else "La trascrizione partirà al termine della registrazione."
                     )
                     p != null -> {
-                        Text("Trascrizione in corso… ${(p.fraction * 100).toInt()}%", fontWeight = FontWeight.Medium)
+                        Text(
+                            if (lesson.pass == 2) "Trascrizione finale con ${modelById(lesson.modelId).name}… ${(p.fraction * 100).toInt()}% · il testo migliora man mano"
+                            else "Trascrizione in corso… ${(p.fraction * 100).toInt()}%",
+                            fontWeight = FontWeight.Medium,
+                        )
                         Text(p.etaMs?.let { "Fine stimata tra ${formatEta(it)}" } ?: "Calcolo del tempo rimanente…",
                             color = MaterialTheme.colorScheme.primary)
                         LinearProgressIndicator(progress = { p.fraction }, Modifier.fillMaxWidth().padding(vertical = 6.dp))
@@ -452,6 +462,11 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
                         TextButton(onClick = { app.cancel(id) }) { Text("Annulla") }
                     }
                     settings.modelId !in installed -> ModelDownloadCard(app, settings.modelId)
+                    lesson.status == TxStatus.DONE && lesson.pass != 2 && settings.finalModelId in installed &&
+                        canonicalModelId(lesson.modelId) != canonicalModelId(settings.finalModelId) -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Anteprima con Whisper ${modelById(lesson.modelId).name}", Modifier.weight(1f))
+                        Button(onClick = { app.transcribe(id, restart = true) }) { Text("Migliora con ${modelById(settings.finalModelId).name}") }
+                    }
                     lesson.status == TxStatus.DONE -> Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Trascritta con Whisper ${modelById(lesson.modelId).name} · il file .md nella cartella è sempre aggiornato",
                             Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
@@ -471,6 +486,8 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
                 }
             }
         }
+
+        SummaryCard(app, lesson)
 
         OutlinedTextField(
             query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
@@ -525,6 +542,70 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
 }
 
 @Composable
+private fun SummaryCard(app: DesktopApp, lesson: Lesson) {
+    val settings by app.settings.collectAsState()
+    val installed by app.summaryModels.installed.collectAsState()
+    val running by app.summaryProgress.collectAsState()
+    var expanded by remember(lesson.id) { mutableStateOf(true) }
+    val progress = running?.takeIf { it.first == lesson.id }?.second
+    val ready = settings.summaryModelId in installed
+    val canRun = lesson.status == TxStatus.DONE && !lesson.recording
+    if (lesson.summary == null && !ready && progress == null) return
+    Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Riassunto", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                when {
+                    progress != null -> {}
+                    lesson.summary != null -> {
+                        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Comprimi" else "Mostra") }
+                        if (canRun && ready) TextButton(onClick = { app.summarize(lesson.id) }) { Text("Rigenera") }
+                    }
+                    lesson.summaryStatus == TxStatus.QUEUED -> Text("In coda", style = MaterialTheme.typography.labelMedium)
+                    canRun && ready -> Button(onClick = { app.summarize(lesson.id) }) { Text("Genera riassunto") }
+                }
+            }
+            when {
+                progress != null -> {
+                    Text("L'IA locale sta leggendo la lezione… ${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+                    LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth().padding(top = 4.dp))
+                }
+                lesson.summaryStatus == TxStatus.ERROR -> Text("Riassunto non riuscito: ${lesson.error ?: ""}", color = MaterialTheme.colorScheme.error)
+                lesson.summary != null && expanded -> SelectionContainer {
+                    Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) { MarkdownText(lesson.summary) }
+                }
+                !canRun -> Text("Verrà creato al termine della trascrizione.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownText(md: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (raw in md.lines()) {
+            val line = raw.trimEnd()
+            when {
+                line.isBlank() -> {}
+                line.startsWith("#") -> Text(inlineMd(line.trimStart('#').trim()), fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 6.dp))
+                Regex("^\\s*[-*•] ").containsMatchIn(line) -> Row {
+                    Text("•", Modifier.width(16.dp))
+                    Text(inlineMd(line.replaceFirst(Regex("^\\s*[-*•] "), "")))
+                }
+                else -> Text(inlineMd(line))
+            }
+        }
+    }
+}
+
+private fun inlineMd(s: String) = buildAnnotatedString {
+    s.replace("$", "").split("**").forEachIndexed { i, p ->
+        if (i % 2 == 1) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(p) } else append(p)
+    }
+}
+
+@Composable
 private fun Action(icon: ImageVector, label: String, enabled: Boolean = true, onClick: () -> Unit) {
     OutlinedButton(onClick = onClick, enabled = enabled, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)) {
         Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(label, style = MaterialTheme.typography.labelLarge)
@@ -539,6 +620,9 @@ private val LANGUAGES = listOf("it" to "Italiano", "en" to "English", "es" to "E
 private fun SettingsPane(app: DesktopApp, frame: Frame) {
     val s by app.settings.collectAsState()
     val installed by app.models.installed.collectAsState()
+    val upgradable by app.models.upgradable.collectAsState()
+    val summaryInstalled by app.summaryModels.installed.collectAsState()
+    val summaryDownloads by app.summaryModels.downloads.collectAsState()
     val downloads by app.models.downloads.collectAsState()
     var updateMsg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -546,20 +630,75 @@ private fun SettingsPane(app: DesktopApp, frame: Frame) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Impostazioni", style = MaterialTheme.typography.headlineSmall)
 
-        Section("Modello di trascrizione (offline)")
+        Section("Modelli di trascrizione (offline)")
+        Text("Durante la lezione un modello leggero mostra l'anteprima; al termine il modello grande ritrascrive tutto.",
+            style = MaterialTheme.typography.bodySmall)
         MODELS.forEach { m ->
             val p = downloads[m.id]
+            val needsUpgrade = m.id in upgradable
+            Card(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${m.name} · ${m.sizeMb} MB", fontWeight = FontWeight.Medium)
+                        Text(m.description, style = MaterialTheme.typography.bodySmall)
+                        when {
+                            p != null -> LinearProgressIndicator(progress = { p }, Modifier.fillMaxWidth().padding(top = 4.dp))
+                            needsUpgrade -> Text("Versione ottimizzata disponibile: più veloce e più precisa",
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                            m.id in installed -> Text("Scaricato", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                    when {
+                        p != null -> {}
+                        needsUpgrade -> TextButton(onClick = { download(app, m.id) }) { Text("Aggiorna") }
+                        m.id in installed -> TextButton(onClick = { app.models.delete(m) }) { Text("Elimina") }
+                        else -> TextButton(onClick = { download(app, m.id) }) { Text("Scarica") }
+                    }
+                }
+            }
+        }
+        Text("Tempo reale (anteprima durante la lezione)", fontWeight = FontWeight.Medium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MODELS.forEach { m ->
+                FilterChip(s.modelId == m.id, onClick = { app.updateSettings { it.copy(modelId = m.id) } }, label = { Text(m.name) })
+            }
+        }
+        Toggle("Trascrizione finale al termine", "Appena finisce la lezione ritrascrive tutto con il modello scelto qui sotto.", s.refineAfter) { v ->
+            app.updateSettings { it.copy(refineAfter = v) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MODELS.drop(2).forEach { m ->
+                FilterChip(s.finalModelId == m.id, onClick = { app.updateSettings { it.copy(finalModelId = m.id) } }, label = { Text(m.name) })
+            }
+        }
+        if (s.finalModelId !in installed) Text("Scarica ${modelById(s.finalModelId).name} per attivare la trascrizione finale.",
+            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+
+        Section("Riassunto con IA locale")
+        Text("Un modello linguistico gira sul computer, offline, e scrive il riassunto: punti chiave, definizioni e scaletta con i minutaggi.",
+            style = MaterialTheme.typography.bodySmall)
+        Toggle("Riassunto automatico", "Al termine della trascrizione finale.", s.autoSummary) { v -> app.updateSettings { it.copy(autoSummary = v) } }
+        SUMMARY_MODELS.forEach { m ->
+            val p = summaryDownloads[m.id]
             Card(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(s.modelId == m.id, onClick = { app.updateSettings { it.copy(modelId = m.id) } })
+                    RadioButton(s.summaryModelId == m.id, onClick = { app.updateSettings { it.copy(summaryModelId = m.id) } })
                     Column(Modifier.weight(1f)) {
                         Text("${m.name} · ${m.sizeMb} MB", fontWeight = FontWeight.Medium)
                         Text(m.description, style = MaterialTheme.typography.bodySmall)
                         if (p != null) LinearProgressIndicator(progress = { p }, Modifier.fillMaxWidth().padding(top = 4.dp))
-                        else if (m.id in installed) Text("Scaricato", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        else if (m.id in summaryInstalled) Text("Scaricato", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                     }
-                    if (m.id in installed) TextButton(onClick = { app.models.delete(m) }) { Text("Elimina") }
-                    else if (p == null) TextButton(onClick = { app.updateSettings { it.copy(modelId = m.id) }; download(app, m.id) }) { Text("Scarica") }
+                    when {
+                        p != null -> {}
+                        m.id in summaryInstalled -> TextButton(onClick = { app.summaryModels.delete(m) }) { Text("Elimina") }
+                        else -> TextButton(onClick = {
+                            app.updateSettings { it.copy(summaryModelId = m.id) }
+                            app.scope.launch(Dispatchers.IO) {
+                                runCatching { app.summaryModels.download(m) }.onFailure { app.messages.value = "Download non riuscito: ${it.message}" }
+                            }
+                        }) { Text("Scarica") }
+                    }
                 }
             }
         }

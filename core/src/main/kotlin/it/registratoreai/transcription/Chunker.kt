@@ -11,8 +11,14 @@ object Chunker {
     const val MAX_CHUNK = SAMPLE_RATE * 29          // whisper elabora al massimo 30 s
     const val MIN_CHUNK = SAMPLE_RATE * 22          // cerca una pausa tra 22 e 29 s
     const val MIN_TAIL = SAMPLE_RATE / 2            // ignora code < 0,5 s
-    /** Blocchi più silenziosi di così non vengono passati a whisper (evita "allucinazioni"). */
-    const val SILENCE_RMS = 0.0025f
+    /**
+     * Solo il silenzio digitale (microfono muto, ~-80 dBFS) viene saltato senza chiamare whisper.
+     * Prima la soglia era 0,0025 (-52 dBFS): con il docente lontano interi blocchi di
+     * lezione finivano sotto soglia e venivano scartati.
+     */
+    const val SILENCE_RMS = 0.0001f
+
+    fun isSilent(samples: FloatArray): Boolean = AudioMath.rms(samples) <= SILENCE_RMS
 
     /**
      * Audio da passare a Whisper. Può essere un tratto continuo oppure più frammenti di

@@ -8,7 +8,9 @@ import it.registratoreai.data.RecState
 import it.registratoreai.data.Settings
 import it.registratoreai.export.Exporter
 import it.registratoreai.service.CaptureService
+import it.registratoreai.summary.SUMMARY_MODELS
 import it.registratoreai.transcription.ModelManager
+import it.registratoreai.transcription.ModelStore
 import it.registratoreai.transcription.Transcriber
 import it.registratoreai.transcription.WhisperEngine
 import it.registratoreai.transcription.WhisperLib
@@ -24,6 +26,8 @@ class RegistratoreApp : Application() {
     lateinit var db: AppDatabase
     lateinit var settings: Settings
     lateinit var models: ModelManager
+    /** Modelli linguistici per il riassunto (cartella separata). */
+    lateinit var summaryModels: ModelStore
     lateinit var exporter: Exporter
     lateinit var transcriber: Transcriber
     private val engine = WhisperEngine()
@@ -35,6 +39,7 @@ class RegistratoreApp : Application() {
         db = AppDatabase.create(this)
         settings = Settings(this)
         models = ModelManager(this)
+        summaryModels = ModelStore(File(filesDir, "llm"), SUMMARY_MODELS)
         exporter = Exporter(this, db.recordings(), settings)
         transcriber = Transcriber(this, db.recordings(), settings, models, engine, exporter)
         CaptureService.createChannel(this)
@@ -55,6 +60,9 @@ class RegistratoreApp : Application() {
     }
 
     fun engineAbort() = WhisperLib.requestAbort(true)
+
+    /** Libera la memoria del modello Whisper (prima di caricare il modello del riassunto). */
+    fun releaseWhisper() = transcriber.releaseEngine()
 }
 
 val Context.app: RegistratoreApp get() = applicationContext as RegistratoreApp

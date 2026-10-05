@@ -9,8 +9,20 @@ object TextCleaner {
         Regex("thank(s| you) for watching|subtitles by|amara\\.org", RegexOption.IGNORE_CASE) to null,
     )
 
+    /** "di di di di di" -> "di"; "va bene va bene va bene va bene" -> "va bene" (whisper che si incastra). */
+    fun collapseRepetitions(t: String): String {
+        var s = t
+        for (n in 1..4) {
+            // stessa sequenza di n parole ripetuta 3+ volte di fila
+            val word = "[\\p{L}\\p{N}']+"
+            val group = (1..n).joinToString("\\s+") { word }
+            s = Regex("\\b($group)(?:[\\s,]+\\1\\b){2,}", RegexOption.IGNORE_CASE).replace(s) { it.groupValues[1] }
+        }
+        return s
+    }
+
     fun clean(raw: String): String? {
-        val t = raw.trim().replace(Regex("\\s+"), " ")
+        val t = collapseRepetitions(raw.trim().replace(Regex("\\s+"), " "))
         if (t.isEmpty()) return null
         // Solo annotazioni tipo "[Musica]", "(applausi)", "*rumore*"
         if (Regex("^[\\[(*♪].*[\\])*♪]$").matches(t)) return null

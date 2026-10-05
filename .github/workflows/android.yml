@@ -104,7 +104,12 @@ jobs:
           mkdir -p dmg dist
           cp -R "$APP" dmg/
           ln -s /Applications dmg/Applications
-          hdiutil create -volname "Registratore Lezioni" -srcfolder dmg -ov -format UDZO dist/RegistratoreLezioni-macOS.dmg
+          # hdiutil sulle macchine di GitHub fallisce a volte con "Resource busy" (XProtect): si ripete
+          for i in 1 2 3 4 5; do
+            hdiutil create -volname "Registratore Lezioni" -srcfolder dmg -ov -format UDZO dist/RegistratoreLezioni-macOS.dmg && break
+            echo "hdiutil occupato, nuovo tentativo tra $((i * 10)) s"; sleep $((i * 10))
+          done
+          test -f dist/RegistratoreLezioni-macOS.dmg
 
       - name: Installer Windows (.msi)
         if: runner.os == 'Windows'

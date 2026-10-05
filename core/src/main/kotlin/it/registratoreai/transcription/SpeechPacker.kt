@@ -20,9 +20,11 @@ class WhisperVad(modelPath: String, threads: Int = 2) : SpeechDetector {
     @Synchronized
     override fun detect(samples: FloatArray): List<LongRange>? {
         if (ptr == 0L) return null
+        // Parametri "inclusivi": meglio trascrivere un po' di silenzio che perdere parole.
+        // Soglia più bassa per le voci lontane, margine ampio per non tagliare inizi e fine frase.
         val flat = WhisperLib.vadSegments(
-            ptr, samples, threshold = 0.5f, minSpeechMs = 250, minSilenceMs = 400,
-            maxSpeechS = 25f, padMs = 200,
+            ptr, AudioMath.normalized(samples), threshold = 0.35f, minSpeechMs = 200, minSilenceMs = 500,
+            maxSpeechS = 25f, padMs = 400,
         ) ?: return null
         return (flat.indices step 2).map { flat[it]..flat[it + 1] }
     }

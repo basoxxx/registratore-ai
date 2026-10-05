@@ -26,6 +26,8 @@ object ServiceState {
     val recording = MutableStateFlow<LiveRecording?>(null)
     val transcription = MutableStateFlow<TxProgress?>(null)
     val queue = MutableStateFlow<List<Long>>(emptyList())
+    /** Riassunto in corso: id della registrazione e avanzamento 0..1. */
+    val summary = MutableStateFlow<Pair<Long, Float>?>(null)
     /** Ultima velocità di trascrizione misurata (ms di audio per ms di calcolo). */
     val speed = MutableStateFlow<Float?>(null)
 }

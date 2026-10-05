@@ -27,28 +27,54 @@ data class WhisperModel(
 
 const val MODELS_BASE_URL = "https://github.com/basoxxx/registratore-ai/releases/download/models"
 
+// Tutti in formato Q8_0: su CPU è veloce quanto il Q4_0 (routine ottimizzate ARM/x86) ma
+// resta affidabile sull'audio difficile, dove il Q4_0 perdeva intere frasi (misurato su una
+// lezione reale registrata da lontano).
 val MODELS = listOf(
-    WhisperModel("tiny-q5_1", "Tiny", "Velocissimo, qualità base. Per telefoni datati.", "ggml-tiny-q5_1.bin", 32_152_673),
-    WhisperModel("base-q5_1", "Base", "Buon compromesso: adatto alla trascrizione in tempo reale.", "ggml-base-q5_1.bin", 59_707_625),
-    WhisperModel("small-q5_1", "Small", "Consigliato per l'italiano: molto più preciso, più lento.", "ggml-small-q5_1.bin", 190_085_487),
-    // Q4_0 generato dal workflow "Modelli Whisper": su CPU è ~2,4x più veloce del Q5_0
-    // (routine "repack" di ggml per ARM dotprod/i8mm e AVX2) con la stessa precisione.
-    WhisperModel("large-v3-turbo-q4_0", "Large v3 Turbo", "Massima qualità. Ottimizzato per trascrivere dopo la lezione.", "ggml-large-v3-turbo-q4_0.bin", 473_992_235),
+    WhisperModel("tiny-q8_0", "Tiny", "Velocissimo, qualità base. Solo per telefoni molto datati.", "ggml-tiny-q8_0.bin", 43_537_433),
+    WhisperModel("base-q8_0", "Base", "Leggero: anteprima in tempo reale su qualsiasi telefono.", "ggml-base-q8_0.bin", 81_768_585),
+    WhisperModel("small-q8_0", "Small", "Consigliato per il tempo reale: buona precisione in italiano.", "ggml-small-q8_0.bin", 264_464_607),
+    WhisperModel("large-v3-turbo-q8_0", "Large v3 Turbo", "Massima precisione, anche con audio difficile. Ideale per la trascrizione finale.", "ggml-large-v3-turbo-q8_0.bin", 874_188_075),
 )
 
-/** Modelli sostituiti da versioni più veloci: id vecchio -> id nuovo. */
-private val REPLACED = mapOf("large-v3-turbo-q5_0" to "large-v3-turbo-q4_0")
-private val OBSOLETE_FILES = listOf("ggml-large-v3-turbo-q5_0.bin")
+/** Modello consigliato per la trascrizione finale dopo la lezione. */
+const val FINAL_MODEL_ID = "large-v3-turbo-q8_0"
+
+/** Modelli sostituiti da versioni migliori: id vecchio -> id nuovo. */
+private val REPLACED = mapOf(
+    "tiny-q5_1" to "tiny-q8_0",
+    "base-q5_1" to "base-q8_0",
+    "small-q5_1" to "small-q8_0",
+    "large-v3-turbo-q5_0" to "large-v3-turbo-q8_0",
+    "large-v3-turbo-q4_0" to "large-v3-turbo-q8_0",
+)
+
+/** File delle versioni precedenti, ancora usati finché non si scarica quella nuova. */
+private val LEGACY_FILES = mapOf(
+    "tiny-q8_0" to "ggml-tiny-q5_1.bin",
+    "base-q8_0" to "ggml-base-q5_1.bin",
+    "small-q8_0" to "ggml-small-q5_1.bin",
+    "large-v3-turbo-q8_0" to "ggml-large-v3-turbo-q5_0.bin",
+)
+
+/** Da eliminare subito: il Q4_0 di Large v3 Turbo sbaglia troppo sull'audio difficile. */
+private val OBSOLETE_FILES = listOf("ggml-large-v3-turbo-q4_0.bin")
 
 fun canonicalModelId(id: String): String = REPLACED[id] ?: id
 
 fun modelById(id: String): WhisperModel = canonicalModelId(id).let { c -> MODELS.firstOrNull { it.id == c } } ?: MODELS[1]
 
+/**
+ * Beam search per il modello grande: più robusto sull'audio difficile e quasi gratuito,
+ * perché il decoder di Large v3 Turbo ha solo 4 strati. Per i modelli piccoli (tempo reale)
+ * resta la decodifica greedy, più rapida.
+ */
+fun beamSizeFor(id: String): Int = if (canonicalModelId(id).startsWith("large")) 5 else 1
+
 /** Download e gestione dei modelli Whisper in una cartella locale (Android e desktop). */
-class ModelStore(private val dir: File) {
+class ModelStore(private val dir: File, private val catalog: List<WhisperModel> = MODELS) {
     init {
         dir.mkdirs()
-        // Libera spazio dai modelli sostituiti (es. Large v3 Turbo Q5_0 -> Q4_0)
         OBSOLETE_FILES.forEach { File(dir, it).delete(); File(dir, "$it.part").delete() }
     }
 
@@ -57,19 +83,34 @@ class ModelStore(private val dir: File) {
     val downloads: StateFlow<Map<String, Float>> = _downloads.asStateFlow()
 
     private val _installed = MutableStateFlow(scanInstalled())
+    /** Modelli utilizzabili (versione nuova oppure, in attesa dell'aggiornamento, quella precedente). */
     val installed: StateFlow<Set<String>> = _installed.asStateFlow()
 
-    private fun scanInstalled() = MODELS.filter { file(it).exists() }.map { it.id }.toSet()
+    private val _upgradable = MutableStateFlow(scanUpgradable())
+    /** Modelli presenti solo nella versione precedente: conviene scaricare quella nuova. */
+    val upgradable: StateFlow<Set<String>> = _upgradable.asStateFlow()
+
+    private fun scanInstalled() = catalog.filter { usableFile(it) != null }.map { it.id }.toSet()
+    private fun scanUpgradable() = catalog.filter { !file(it).exists() && legacyFile(it)?.exists() == true }.map { it.id }.toSet()
+    private fun byId(id: String) = catalog.firstOrNull { it.id == canonicalModelId(id) } ?: modelById(id)
+    private fun rescan() {
+        _installed.value = scanInstalled()
+        _upgradable.value = scanUpgradable()
+    }
 
     fun file(model: WhisperModel) = File(dir, model.fileName)
+    private fun legacyFile(model: WhisperModel) = LEGACY_FILES[model.id]?.let { File(dir, it) }
+    private fun usableFile(model: WhisperModel): File? =
+        file(model).takeIf { it.exists() } ?: legacyFile(model)?.takeIf { it.exists() }
 
-    fun isInstalled(id: String) = file(modelById(id)).exists()
+    fun isInstalled(id: String) = usableFile(byId(id)) != null
 
-    fun pathFor(id: String): String? = file(modelById(id)).takeIf { it.exists() }?.absolutePath
+    fun pathFor(id: String): String? = usableFile(byId(id))?.absolutePath
 
     fun delete(model: WhisperModel) {
         file(model).delete()
-        _installed.value = scanInstalled()
+        legacyFile(model)?.delete()
+        rescan()
     }
 
     /** Scarica il modello (riprende i download interrotti grazie all'header Range). */
@@ -100,6 +141,7 @@ class ModelStore(private val dir: File) {
             if (code == 416 && part.length() > 0) {
                 // Il file parziale era già completo
                 part.renameTo(file(model))
+                legacyFile(model)?.delete()
                 return@withContext
             }
             val append = code == HttpURLConnection.HTTP_PARTIAL
@@ -125,12 +167,14 @@ class ModelStore(private val dir: File) {
             }
             if (part.length() >= total) {
                 part.renameTo(file(model))
+                // La versione precedente non serve più
+                legacyFile(model)?.delete()
             } else {
                 error("Download incompleto")
             }
         } finally {
             _downloads.update { it - model.id }
-            _installed.value = scanInstalled()
+            rescan()
         }
     }
 }
