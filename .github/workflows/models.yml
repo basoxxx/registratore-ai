@@ -28,7 +28,13 @@ jobs:
             repo="unsloth/${f%-Q4_K_M.gguf}-GGUF"
             curl -fL --retry 5 --retry-delay 5 -o "$f" "https://huggingface.co/$repo/resolve/main/$f"
           done
+          # Le release di GitHub accettano file fino a 2 GiB: i più grandi vanno in pezzi da 1900 MiB
+          # (l'app li scarica e li riunisce; vedi PART_SIZE in ModelStore.kt)
           sha256sum *.bin *.gguf > SHA256SUMS
+          for f in *.gguf *.bin; do
+            if [ $(stat -c %s "$f") -gt 2000000000 ]; then split -b 1900M "$f" "$f.part-" && rm "$f"; fi
+          done
+          ls -la
           ls -la
 
       - uses: softprops/action-gh-release@v2
