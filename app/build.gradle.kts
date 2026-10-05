@@ -73,6 +73,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions { unitTests.isIncludeAndroidResources = true }
     kotlinOptions {
         jvmTarget = "17"
     }
@@ -110,5 +111,18 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.40.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.40.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
+// Screenshot delle schermate (Robolectric + Roborazzi): ./gradlew :app:testDebugUnitTest --tests '*ScreenshotTest*'
+tasks.withType<Test>().configureEach {
+    systemProperty("roborazzi.test.record", "true")
+    systemProperty("shots.dir", layout.buildDirectory.dir("shots").get().asFile.path)
+    providers.gradleProperty("demoSegments").orNull?.let { systemProperty("demo.segments", it) }
+    maxHeapSize = "3g"
+}

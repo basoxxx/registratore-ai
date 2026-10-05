@@ -1,4 +1,4 @@
-package it.registratoreai.ui.theme
+package it.registratoreai.desktop
 
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -100,7 +100,7 @@ private val AppShapes = Shapes(
 )
 
 @Composable
-fun RegistratoreTheme(content: @Composable () -> Unit) {
+fun AppTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (isSystemInDarkTheme()) Dark else Light,
         typography = AppTypography, shapes = AppShapes, content = content,
