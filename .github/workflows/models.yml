@@ -2,7 +2,8 @@ name: Modelli Whisper
 
 # Pubblica i modelli di trascrizione come file della release "models" di questo repository:
 # le app scaricano i modelli solo da qui. (I file superano il limite di 100 MB di git,
-# mentre gli allegati delle release arrivano a 2 GB.) Va eseguito una volta, o per aggiornarli.
+# mentre gli allegati delle release arrivano a 2 GB.) I file già presenti nella release
+# (es. le versioni Q5_1/Q5_0/Q4_0 usate dalle app precedenti) restano disponibili.
 on:
   workflow_dispatch:
   push:
@@ -16,26 +17,19 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Scarica i modelli ufficiali whisper.cpp
+      - name: Scarica i modelli ufficiali whisper.cpp (Q8_0)
         run: |
           mkdir models && cd models
-          # ggml-large-v3-turbo-q5_0.bin resta per le versioni dell'app fino alla 1.0.9
-          for f in ggml-tiny-q5_1.bin ggml-base-q5_1.bin ggml-small-q5_1.bin ggml-large-v3-turbo-q5_0.bin; do
+          for f in ggml-tiny-q8_0.bin ggml-base-q8_0.bin ggml-small-q8_0.bin ggml-large-v3-turbo-q8_0.bin; do
             curl -fL --retry 5 --retry-delay 5 -o "$f" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$f"
           done
-
-      - name: Large v3 Turbo in Q4_0 (circa 2,4x più veloce su CPU)
-        run: |
-          cmake -S third_party/whisper.cpp -B qbuild -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_SDL2=OFF -DGGML_OPENMP=OFF
-          cmake --build qbuild -j 4 --target quantize
-          curl -fL --retry 5 --retry-delay 5 -o turbo-f16.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
-          qbuild/bin/quantize turbo-f16.bin models/ggml-large-v3-turbo-q4_0.bin q4_0
-          rm turbo-f16.bin
-          cd models && sha256sum *.bin > SHA256SUMS && ls -la
+          # Modelli linguistici per il riassunto (Qwen3, licenza Apache 2.0)
+          for f in Qwen3-4B-Q4_K_M.gguf Qwen3-1.7B-Q4_K_M.gguf; do
+            repo="unsloth/${f%-Q4_K_M.gguf}-GGUF"
+            curl -fL --retry 5 --retry-delay 5 -o "$f" "https://huggingface.co/$repo/resolve/main/$f"
+          done
+          sha256sum *.bin *.gguf > SHA256SUMS
+          ls -la
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -43,10 +37,10 @@ jobs:
           target_commitish: main
           name: Modelli di trascrizione (Whisper)
           body: |
-            Modelli Whisper (formato ggml di whisper.cpp) scaricati dalle app Registratore Lezioni.
-            Large v3 Turbo è anche in formato Q4_0, generato da questo workflow: su CPU è circa
-            2,4 volte più veloce del Q5_0 con la stessa precisione.
-            Non è una versione dell'app: per installare l'app usa l'ultima release.
+            Modelli Whisper (formato ggml di whisper.cpp) per la trascrizione e modelli Qwen3 (GGUF,
+            llama.cpp) per il riassunto, scaricati dalle app Registratore Lezioni.
+            Le versioni Q8_0 sono veloci quanto le più compresse ma affidabili anche sull'audio
+            difficile (lezioni registrate da lontano). Non è una versione dell'app.
           files: models/*
           prerelease: true
           make_latest: false

@@ -43,6 +43,17 @@ endif ()
 
 add_subdirectory(${REPO_ROOT}/third_party/whisper.cpp whisper_build)
 
-add_library(whisper_jni SHARED ${REPO_ROOT}/app/src/main/cpp/whisper_jni.cpp)
-target_include_directories(whisper_jni PRIVATE ${JNI_INCLUDE_DIRS})
-target_link_libraries(whisper_jni PRIVATE whisper ggml)
+# llama.cpp b5755 (riassunto): stesso ggml di whisper.cpp 1.7.6, condiviso.
+set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+add_subdirectory(${REPO_ROOT}/third_party/llama.cpp llama_build)
+
+add_library(whisper_jni SHARED
+    ${REPO_ROOT}/app/src/main/cpp/whisper_jni.cpp
+    ${REPO_ROOT}/app/src/main/cpp/llama_jni.cpp)
+target_include_directories(whisper_jni PRIVATE ${JNI_INCLUDE_DIRS} ${REPO_ROOT}/third_party/llama.cpp/include)
+target_link_libraries(whisper_jni PRIVATE whisper llama ggml)

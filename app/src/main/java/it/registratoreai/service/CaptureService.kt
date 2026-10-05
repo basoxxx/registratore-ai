@@ -27,10 +27,15 @@ import it.registratoreai.app
 import it.registratoreai.audio.SAMPLE_RATE
 import it.registratoreai.audio.WavWriter
 import it.registratoreai.audio.samplesToMs
+import it.registratoreai.data.Pass
 import it.registratoreai.data.RecState
+import it.registratoreai.data.SummaryState
+import it.registratoreai.summary.LlamaLib
+import it.registratoreai.summary.SummaryRunner
 import it.registratoreai.data.Recording
 import it.registratoreai.data.TxState
 import it.registratoreai.text.formatDuration
+import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.formatEta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -65,6 +70,10 @@ class CaptureService : Service() {
         const val ACTION_STOP = "stop"
         const val ACTION_TRANSCRIBE = "transcribe"
         const val ACTION_CANCEL_TX = "cancel_tx"
+        /** Ritrascrive con il modello finale mantenendo visibile il testo attuale. */
+        const val ACTION_REFINE = "refine"
+        /** Genera (o rigenera) il riassunto con l'IA locale. */
+        const val ACTION_SUMMARIZE = "summarize"
         const val ACTION_RESUME_PENDING = "resume_pending"
         const val EXTRA_ID = "id"
         const val EXTRA_TITLE = "title"
@@ -116,6 +125,9 @@ class CaptureService : Service() {
         scope.launch {
             ServiceState.transcription.collectLatest { if (recordingId == null) refreshNotification() }
         }
+        scope.launch {
+            ServiceState.summary.collectLatest { if (recordingId == null) refreshNotification() }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -140,10 +152,13 @@ class CaptureService : Service() {
             ACTION_PAUSE -> setPaused(true)
             ACTION_RESUME -> setPaused(false)
             ACTION_STOP -> scope.launch { stopRecording() }
-            ACTION_TRANSCRIBE -> if (id > 0) scope.launch { enqueue(id) }
+            ACTION_TRANSCRIBE -> if (id > 0) scope.launch { transcribeLater(id) }
+            ACTION_REFINE -> if (id > 0) scope.launch { dao.startFinalPass(id); enqueue(id) }
+            ACTION_SUMMARIZE -> if (id > 0) scope.launch { enqueueSummary(id) }
             ACTION_CANCEL_TX -> if (id > 0) scope.launch { cancelTranscription(id) }
             ACTION_RESUME_PENDING -> scope.launch {
                 dao.pendingTranscriptions().forEach { enqueue(it.id) }
+                dao.pendingSummaries().forEach { enqueueSummary(it.id) }
                 maybeStop()
             }
             else -> scope.launch { maybeStop() }
@@ -189,6 +204,11 @@ class CaptureService : Service() {
             if (rec.paused) b.addAction(0, "Riprendi", actionIntent(ACTION_RESUME))
             else b.addAction(0, "Pausa", actionIntent(ACTION_PAUSE))
             b.addAction(0, "Stop", actionIntent(ACTION_STOP))
+        } else if (ServiceState.summary.value != null) {
+            val (_, p) = ServiceState.summary.value!!
+            b.setContentTitle("Riassunto della lezione in corso")
+            b.setContentText("${(p * 100).toInt()}% · IA locale sul telefono")
+            b.setProgress(1000, (p * 1000).toInt(), p <= 0f)
         } else {
             b.setContentTitle("Trascrizione in corso")
             if (tx != null) {
@@ -333,17 +353,57 @@ class CaptureService : Service() {
         val settings = app.settings.current
         val rec = dao.get(id)
         val alreadyQueued = queueLock.withLock { id in queue } || currentTx == id
-        if (!alreadyQueued && rec != null && rec.transcription == TxState.NONE &&
-            settings.autoTranscribe && app.models.isInstalled(settings.modelId)
-        ) {
-            enqueue(id)
+        if (!alreadyQueued && rec != null && rec.transcription == TxState.NONE && settings.autoTranscribe) {
+            transcribeLater(id)
         }
+        // Se l'anteprima in tempo reale era già finita, parte subito la trascrizione finale
+        if (!alreadyQueued && rec != null && rec.transcription == TxState.DONE) afterTranscription(id)
         // Ora serve solo il tipo "dataSync" (niente più microfono)
         goForeground(false)
         maybeStop()
     }
 
     // ---------------------------------------------------------------- Trascrizione
+
+    /** Trascrizione "dopo": direttamente con il modello finale se è scaricato. */
+    private suspend fun transcribeLater(id: Long) {
+        val s = app.settings.current
+        when {
+            app.models.isInstalled(s.finalModelId) -> { dao.startFinalPass(id); enqueue(id) }
+            app.models.isInstalled(s.modelId) -> enqueue(id)
+        }
+    }
+
+    /** Dopo l'anteprima: trascrizione finale con il modello grande (se diverso e scaricato). */
+    private suspend fun afterTranscription(id: Long) {
+        val r = dao.get(id) ?: return
+        if (r.transcription != TxState.DONE || r.state != RecState.DONE) return
+        val s = app.settings.current
+        if (r.pass == Pass.DRAFT && s.refineAfter && app.models.isInstalled(s.finalModelId) &&
+            canonicalModelId(r.modelId) != canonicalModelId(s.finalModelId)
+        ) {
+            dao.startFinalPass(id)
+            enqueue(id)
+        } else if (s.autoSummary && summaries.isReady() && r.summaryState == SummaryState.NONE) {
+            // Trascrizione definitiva pronta: riassunto automatico
+            enqueueSummary(id)
+        }
+    }
+
+    // ---------------------------------------------------------------- Riassunto
+
+    private val summaries by lazy { SummaryRunner(app) }
+    private val summaryQueue = ArrayDeque<Long>()
+
+    private suspend fun enqueueSummary(id: Long) {
+        if (!summaries.isReady()) return
+        queueLock.withLock {
+            if (id in summaryQueue || ServiceState.summary.value?.first == id) return
+            summaryQueue.addLast(id)
+        }
+        dao.setSummaryState(id, SummaryState.QUEUED)
+        ensureWorker()
+    }
 
     private suspend fun enqueue(id: Long, front: Boolean = false) {
         dao.get(id) ?: return
@@ -358,6 +418,13 @@ class CaptureService : Service() {
             ServiceState.queue.value = queue.toList()
         }
         dao.setTranscription(id, TxState.QUEUED)
+        // Una lezione che inizia ha la precedenza anche su un riassunto in corso: lo si riprende dopo
+        val runningSummary = ServiceState.summary.value?.first
+        if (front && runningSummary != null) {
+            txJob?.let { it.cancel(); LlamaLib.requestAbort(true); it.join() }
+            queueLock.withLock { summaryQueue.addFirst(runningSummary) }
+            dao.setSummaryState(runningSummary, SummaryState.QUEUED)
+        }
         preempt?.let { old ->
             txJob?.let { it.cancel(); app.engineAbort(); it.join() }
             queueLock.withLock { if (old !in queue) queue.addLast(old); ServiceState.queue.value = queue.toList() }
@@ -377,6 +444,8 @@ class CaptureService : Service() {
                 try {
                     refreshNotification()
                     app.transcriber.run(next)
+                    currentTx = null
+                    afterTranscription(next)
                 } catch (e: CancellationException) {
                     currentTx = null
                     throw e
@@ -386,6 +455,18 @@ class CaptureService : Service() {
                 }
                 currentTx = null
             }
+            // I riassunti partono quando non c'è nessuna trascrizione da fare (e non si sta registrando)
+            while (recordingId == null) {
+                val next = queueLock.withLock { if (queue.isEmpty()) summaryQueue.removeFirstOrNull() else null } ?: break
+                try {
+                    refreshNotification()
+                    summaries.run(next)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Riassunto fallito", e)
+                }
+            }
             if (recordingId == null) releaseWakeLock()
             maybeStop()
         }
@@ -393,8 +474,13 @@ class CaptureService : Service() {
 
     private suspend fun cancelTranscription(id: Long) {
         queueLock.withLock {
+            summaryQueue.remove(id)
             queue.remove(id)
             ServiceState.queue.value = queue.toList()
+        }
+        if (ServiceState.summary.value?.first == id) {
+            txJob?.let { it.cancel(); LlamaLib.requestAbort(true); it.join() }
+            ServiceState.summary.value = null
         }
         if (currentTx == id) {
             txJob?.let { it.cancel(); app.engineAbort(); it.join() }

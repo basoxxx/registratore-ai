@@ -18,6 +18,10 @@ App per **Android, macOS e Windows** per **registrare le lezioni universitarie**
     (misurato sulla velocità reale del dispositivo e ricordato per ogni modello).
   - I blocchi audio sono tagliati nelle pause; il nome del corso viene usato come contesto per
     migliorare la precisione; le tipiche "allucinazioni" di Whisper sul silenzio vengono filtrate.
+- **Trascrizione in due passaggi**: durante la lezione un modello leggero mostra l'anteprima; appena
+  finisce, Large v3 Turbo (Q8_0 + beam search) ritrascrive tutto e sostituisce il testo man mano.
+- **Riassunto automatico con IA locale** (llama.cpp + Qwen3, offline): "In breve", punti chiave,
+  definizioni, cose da fare e scaletta della lezione con i minutaggi; incluso nel file Markdown.
 - **Esportazione** in Markdown (`.md`) o testo (`.txt`), con timestamp per paragrafo:
   condividi, salva dove vuoi, copia negli appunti.
 - **Esportazione automatica**: scegli una cartella (es. il vault di Obsidian o una cartella
@@ -62,10 +66,15 @@ di questo repository (pubblicata dal workflow *Modelli Whisper*: i file superano
 
 | Modello | Dimensione | Uso consigliato |
 |---|---|---|
-| Tiny | 32 MB | Telefoni datati, solo bozze |
-| **Base** (predefinito) | 60 MB | Tempo reale su quasi tutti i telefoni |
-| **Small** | 190 MB | Molto più preciso in italiano; tempo reale sui telefoni recenti |
-| Large v3 Turbo | 474 MB | Massima qualità, ottimizzato per trascrivere "dopo" la lezione |
+| Tiny | 44 MB | Telefoni molto datati |
+| **Base** (anteprima predefinita) | 82 MB | Anteprima in tempo reale su qualsiasi telefono |
+| **Small** | 264 MB | Anteprima più precisa sui telefoni recenti |
+| **Large v3 Turbo** (finale) | 874 MB | Trascrizione finale: affidabile anche con audio difficile |
+
+Tutti in formato Q8_0: su una lezione reale registrata da lontano il Q4_0 perdeva frasi intere
+("Grazie a tutti" al posto di 30 secondi di spiegazione), mentre il Q8_0 è veloce uguale e preciso.
+
+Riassunto: **Qwen3 4B** (2,5 GB, consigliato; telefoni con almeno 6 GB di RAM) o Qwen3 1.7B (1,1 GB).
 
 ### Ottimizzazioni della trascrizione "dopo"
 

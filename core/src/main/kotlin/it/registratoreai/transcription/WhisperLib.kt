@@ -21,6 +21,9 @@ object WhisperLib {
         initBackends(WhisperNative.backendsDir)
     }
 
+    /** Accedere a questo oggetto carica la libreria nativa (usata anche da LlamaLib). */
+    fun ensureLoaded() {}
+
     external fun initBackends(dir: String?)
     external fun vadInit(modelPath: String, threads: Int): Long
     external fun vadFree(ptr: Long)
@@ -32,7 +35,7 @@ object WhisperLib {
     external fun initContext(modelPath: String): Long
     external fun freeContext(ptr: Long)
     external fun requestAbort(value: Boolean)
-    external fun transcribe(ptr: Long, samples: FloatArray, language: String, prompt: String?, threads: Int): Int
+    external fun transcribe(ptr: Long, samples: FloatArray, language: String, prompt: String?, threads: Int, beamSize: Int): Int
     external fun segmentT0(ptr: Long, i: Int): Long
     external fun segmentT1(ptr: Long, i: Int): Long
     external fun segmentText(ptr: Long, i: Int): ByteArray
@@ -56,9 +59,9 @@ class WhisperEngine {
     }
 
     @Synchronized
-    fun transcribe(samples: FloatArray, language: String, prompt: String?, threads: Int): List<RawSegment>? {
+    fun transcribe(samples: FloatArray, language: String, prompt: String?, threads: Int, beamSize: Int = 1): List<RawSegment>? {
         check(ptr != 0L) { "Modello non caricato" }
-        val n = WhisperLib.transcribe(ptr, samples, language, prompt, threads)
+        val n = WhisperLib.transcribe(ptr, samples, language, prompt, threads, beamSize)
         if (n < 0) return null
         return (0 until n).map {
             RawSegment(

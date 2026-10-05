@@ -33,7 +33,7 @@ class Exporter(
                 partialUntilMs = if (rec.transcription != TxState.DONE) rec.transcribedUntilMs else null,
             ),
             segments.map { TextSegment(it.startMs, it.endMs, it.text) },
-            format, timestamps,
+            format, timestamps, rec.summary,
         )
 
     fun fileName(rec: Recording, ext: String): String = TranscriptFormatter.fileName(rec.title, rec.createdAt, ext)

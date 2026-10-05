@@ -4,6 +4,7 @@ import it.registratoreai.text.ExportFormat
 import it.registratoreai.text.LessonInfo
 import it.registratoreai.text.TextSegment
 import it.registratoreai.text.TranscriptFormatter
+import it.registratoreai.transcription.FINAL_MODEL_ID
 import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.modelById
 import org.json.JSONArray
@@ -30,6 +31,10 @@ data class Lesson(
     val language: String = "it",
     val error: String? = null,
     val segments: List<TextSegment> = emptyList(),
+    /** 0 = nessuno, 1 = anteprima, 2 = trascrizione finale. */
+    val pass: Int = 0,
+    val summary: String? = null,
+    val summaryStatus: TxStatus = TxStatus.NONE,
 ) {
     val id: String get() = dir.name
     val audio: File get() = File(dir, "audio.wav")
@@ -41,7 +46,7 @@ data class Lesson(
         partialUntilMs = if (status != TxStatus.DONE) transcribedUntilMs else null,
     )
 
-    fun export(format: ExportFormat, timestamps: Boolean) = TranscriptFormatter.build(info(), segments, format, timestamps)
+    fun export(format: ExportFormat, timestamps: Boolean) = TranscriptFormatter.build(info(), segments, format, timestamps, summary)
 }
 
 class LessonStore(var root: File) {
@@ -70,8 +75,11 @@ class LessonStore(var root: File) {
             error = j.optString("error").ifBlank { null },
             segments = (0 until segs.length()).map {
                 val s = segs.getJSONObject(it)
-                TextSegment(s.getLong("start"), s.getLong("end"), s.getString("text"))
+                TextSegment(s.getLong("start"), s.getLong("end"), s.getString("text"), s.optInt("pass", 1))
             },
+            pass = j.optInt("pass", 0),
+            summary = j.optString("summary").ifBlank { null },
+            summaryStatus = runCatching { TxStatus.valueOf(j.optString("summaryStatus", "NONE")) }.getOrDefault(TxStatus.NONE),
         )
     }
 
@@ -84,8 +92,9 @@ class LessonStore(var root: File) {
             .put("durationMs", lesson.durationMs).put("recording", lesson.recording)
             .put("status", lesson.status.name).put("transcribedUntilMs", lesson.transcribedUntilMs)
             .put("modelId", lesson.modelId).put("language", lesson.language).put("error", lesson.error ?: "")
+            .put("pass", lesson.pass).put("summary", lesson.summary ?: "").put("summaryStatus", lesson.summaryStatus.name)
             .put("segments", JSONArray(lesson.segments.map {
-                JSONObject().put("start", it.startMs).put("end", it.endMs).put("text", it.text)
+                JSONObject().put("start", it.startMs).put("end", it.endMs).put("text", it.text).put("pass", it.pass)
             }))
         writeAtomic(File(lesson.dir, "lezione.json"), j.toString(1))
         writeAtomic(lesson.markdownFile, lesson.export(ExportFormat.MARKDOWN, timestamps))
@@ -128,7 +137,13 @@ object Paths {
 }
 
 data class DesktopSettings(
-    val modelId: String = "base-q5_1",
+    /** Modello per l'anteprima in tempo reale. */
+    val modelId: String = "base-q8_0",
+    /** Modello per la trascrizione finale dopo la lezione. */
+    val finalModelId: String = FINAL_MODEL_ID,
+    val refineAfter: Boolean = true,
+    val autoSummary: Boolean = true,
+    val summaryModelId: String = "qwen3-4b-q4_k_m",
     val language: String = "it",
     val liveTranscription: Boolean = true,
     val autoTranscribe: Boolean = true,
@@ -146,6 +161,10 @@ data class DesktopSettings(
             val p = Properties().apply { file.inputStream().use { load(it) } }
             return DesktopSettings(
                 modelId = canonicalModelId(p.getProperty("modelId", d.modelId)),
+                finalModelId = canonicalModelId(p.getProperty("finalModelId", d.finalModelId)),
+                refineAfter = p.getProperty("refineAfter", "${d.refineAfter}").toBoolean(),
+                autoSummary = p.getProperty("autoSummary", "${d.autoSummary}").toBoolean(),
+                summaryModelId = p.getProperty("summaryModelId", d.summaryModelId),
                 language = p.getProperty("language", d.language),
                 liveTranscription = p.getProperty("live", "${d.liveTranscription}").toBoolean(),
                 autoTranscribe = p.getProperty("autoTranscribe", "${d.autoTranscribe}").toBoolean(),
@@ -159,7 +178,8 @@ data class DesktopSettings(
 
     fun save() {
         val p = Properties()
-        p["modelId"] = modelId; p["language"] = language; p["live"] = "$liveTranscription"
+        p["modelId"] = modelId; p["finalModelId"] = finalModelId; p["refineAfter"] = "$refineAfter"
+        p["autoSummary"] = "$autoSummary"; p["summaryModelId"] = summaryModelId; p["language"] = language; p["live"] = "$liveTranscription"
         p["autoTranscribe"] = "$autoTranscribe"; p["threads"] = "$threads"; p["timestamps"] = "$timestamps"
         p["libraryDir"] = libraryDir; p["checkUpdates"] = "$checkUpdates"
         file.outputStream().use { p.store(it, "Registratore Lezioni") }

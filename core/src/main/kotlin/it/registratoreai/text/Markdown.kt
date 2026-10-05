@@ -4,7 +4,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class TextSegment(val startMs: Long, val endMs: Long, val text: String)
+/** [pass]: 1 = anteprima (tempo reale), 2 = trascrizione finale con il modello grande. */
+data class TextSegment(val startMs: Long, val endMs: Long, val text: String, val pass: Int = 1)
 
 data class LessonInfo(
     val title: String,
@@ -47,7 +48,10 @@ object TranscriptFormatter {
         return out
     }
 
-    fun build(info: LessonInfo, segments: List<TextSegment>, format: ExportFormat, timestamps: Boolean = true): String {
+    fun build(
+        info: LessonInfo, segments: List<TextSegment>, format: ExportFormat, timestamps: Boolean = true,
+        summary: String? = null,
+    ): String {
         val paras = paragraphs(segments)
         val sb = StringBuilder()
         when (format) {
@@ -61,6 +65,11 @@ object TranscriptFormatter {
                     sb.append("- **Stato:** trascrizione in corso, aggiornata a ").append(formatTimestamp(it)).append('\n')
                 }
                 sb.append("\n---\n\n")
+                if (!summary.isNullOrBlank()) {
+                    // Le sezioni del riassunto (## ...) diventano sottosezioni di "Riassunto"
+                    sb.append("## Riassunto\n\n")
+                    sb.append(summary.trim().replace(Regex("(?m)^## "), "### ")).append("\n\n---\n\n## Trascrizione\n\n")
+                }
                 for (p in paras) {
                     if (timestamps) sb.append("**[").append(formatTimestamp(p.startMs)).append("]** ")
                     sb.append(p.text).append("\n\n")
@@ -71,6 +80,10 @@ object TranscriptFormatter {
                 sb.append(formatDate(info.createdAt))
                 if (info.course.isNotBlank()) sb.append(" - ").append(info.course)
                 sb.append(" - ").append(formatDuration(info.durationMs)).append("\n\n")
+                if (!summary.isNullOrBlank()) {
+                    sb.append("RIASSUNTO\n\n").append(summary.trim().replace(Regex("(?m)^#+ "), "").replace("**", ""))
+                        .append("\n\nTRASCRIZIONE\n\n")
+                }
                 for (p in paras) {
                     if (timestamps) sb.append('[').append(formatTimestamp(p.startMs)).append("] ")
                     sb.append(p.text).append("\n\n")

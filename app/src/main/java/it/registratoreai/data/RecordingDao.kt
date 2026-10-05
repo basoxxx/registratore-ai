@@ -48,6 +48,35 @@ interface RecordingDao {
     @Query("UPDATE recordings SET title = :title, course = :course WHERE id = :id")
     suspend fun rename(id: Long, title: String, course: String)
 
+    @Query("UPDATE recordings SET pass = :pass WHERE id = :id")
+    suspend fun setPass(id: Long, pass: Int)
+
+    /** Avvia la trascrizione finale: si riparte da 0 ma il testo dell'anteprima resta visibile. */
+    @Query("UPDATE recordings SET pass = 2, transcribedUntilMs = 0, transcription = 'QUEUED', errorMessage = NULL WHERE id = :id")
+    suspend fun startFinalPass(id: Long)
+
+    @Query("UPDATE recordings SET summary = :summary, summaryState = :state WHERE id = :id")
+    suspend fun setSummary(id: Long, summary: String?, state: SummaryState)
+
+    @Query("UPDATE recordings SET summaryState = :state WHERE id = :id")
+    suspend fun setSummaryState(id: Long, state: SummaryState)
+
+    @Query("SELECT * FROM recordings WHERE summaryState IN ('QUEUED', 'RUNNING') ORDER BY createdAt")
+    suspend fun pendingSummaries(): List<Recording>
+
+    /** Segmenti dell'anteprima che si sovrappongono al tratto [fromMs, toMs) appena ritrascritto. */
+    @Query("DELETE FROM segments WHERE recordingId = :id AND pass < 2 AND startMs < :toMs AND endMs > :fromMs")
+    suspend fun deleteDraftOverlapping(id: Long, fromMs: Long, toMs: Long)
+
+    @Query("DELETE FROM segments WHERE recordingId = :id AND pass < 2")
+    suspend fun deleteDraft(id: Long)
+
+    @Query("DELETE FROM segments WHERE recordingId = :id AND pass = 2 AND startMs >= :fromMs")
+    suspend fun deleteFinalFrom(id: Long, fromMs: Long)
+
+    @Query("SELECT * FROM segments WHERE recordingId = :id AND pass = 2 ORDER BY startMs DESC LIMIT :n")
+    suspend fun lastFinalSegments(id: Long, n: Int): List<Segment>
+
     @Query("SELECT * FROM recordings WHERE transcription IN ('QUEUED', 'RUNNING') ORDER BY createdAt")
     suspend fun pendingTranscriptions(): List<Recording>
 

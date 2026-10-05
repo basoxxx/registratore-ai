@@ -9,6 +9,7 @@ import it.registratoreai.audio.SAMPLE_RATE
 import it.registratoreai.audio.WavReader
 import it.registratoreai.audio.msToSamples
 import it.registratoreai.audio.samplesToMs
+import it.registratoreai.data.Pass
 import it.registratoreai.data.RecordingDao
 import it.registratoreai.data.Segment
 import it.registratoreai.data.Settings
@@ -22,6 +23,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import it.registratoreai.transcription.EtaEstimator
+import it.registratoreai.transcription.beamSizeFor
 import it.registratoreai.transcription.SpeechPacker
 import it.registratoreai.transcription.WhisperVad
 import it.registratoreai.transcription.SpeedStore
@@ -58,13 +60,19 @@ class Transcriber(
         return WhisperVad(model.absolutePath).takeIf { it.ok }?.also { vadInstance = it }
     }
 
+    fun releaseEngine() = engine.release()
+
     /** Velocità nota del modello (ms di audio per ms di calcolo), per stimare la coda. */
     fun speedFor(modelId: String): Float? = speeds.get(modelId)
 
     suspend fun run(id: Long) = withContext(Dispatchers.Default) {
         val rec = dao.get(id) ?: return@withContext
         val s = settings.current
-        val modelPath = models.pathFor(s.modelId)
+        // Passaggio finale: modello grande (se scaricato) che sostituisce man mano l'anteprima.
+        val isFinal = rec.pass == Pass.FINAL
+        val modelId = if (isFinal && models.isInstalled(s.finalModelId)) s.finalModelId else s.modelId
+        val beam = beamSizeFor(modelId)
+        val modelPath = models.pathFor(modelId)
         if (modelPath == null) {
             dao.setTranscription(id, TxState.ERROR, "Nessun modello di trascrizione scaricato. Vai in Impostazioni.")
             return@withContext
@@ -74,7 +82,8 @@ class Transcriber(
             return@withContext
         }
         dao.setTranscription(id, TxState.RUNNING)
-        dao.setModel(id, s.modelId, s.language)
+        dao.setModel(id, modelId, s.language)
+        if (rec.pass == Pass.NONE) dao.setPass(id, Pass.DRAFT)
 
         // Whisper lavora su PCM 16 kHz: se l'audio è stato compresso lo decodifichiamo in un file temporaneo.
         var tempWav: File? = null
@@ -87,14 +96,15 @@ class Transcriber(
             }
         }
 
-        eta = EtaEstimator(speeds.get(s.modelId))
+        eta = EtaEstimator(speeds.get(modelId))
         ServiceState.speed.value = eta.speed
         // Dopo la lezione: VAD + impacchettamento del parlato (vedi SpeechPacker)
         val packer = vad()?.let { SpeechPacker(it) } ?: SpeechPacker { null }
         var offsetMs = rec.transcribedUntilMs
-        // Se l'app si era chiusa a metà di un blocco, eliminiamo i segmenti oltre l'ultimo punto salvato.
-        dao.deleteSegmentsFrom(id, offsetMs)
-        val previous = dao.lastSegments(id, 6).reversed()
+        // Se l'app si era chiusa a metà di un blocco, eliminiamo i segmenti oltre l'ultimo punto salvato
+        // (nel passaggio finale solo quelli già "finali": l'anteprima resta finché non viene sostituita).
+        if (isFinal) dao.deleteFinalFrom(id, offsetMs) else dao.deleteSegmentsFrom(id, offsetMs)
+        val previous = (if (isFinal) dao.lastFinalSegments(id, 6) else dao.lastSegments(id, 6)).reversed()
         var promptTail = previous.joinToString(" ") { it.text }.takeLast(PROMPT_CHARS)
         var lastText = previous.lastOrNull()?.text
 
@@ -106,7 +116,9 @@ class Transcriber(
                     val window = when (val next = packer.next(reader, offsetMs, live)) {
                         is Chunker.Chunk.Audio -> next.window
                         is Chunker.Chunk.Skip -> {
-                            // Solo silenzio: si avanza senza chiamare Whisper
+                            // Solo silenzio: si avanza senza chiamare Whisper (e si toglie eventuale
+                            // testo "inventato" dall'anteprima su quel silenzio)
+                            if (isFinal) dao.deleteDraftOverlapping(id, offsetMs, next.endMs)
                             offsetMs = next.endMs
                             dao.setTranscribedUntil(id, offsetMs)
                             publish(id, offsetMs, samplesToMs(reader.availableSamples()), live)
@@ -124,14 +136,14 @@ class Transcriber(
                     if (samples.isEmpty()) break
 
                     val chunkStartMs = offsetMs
-                    if (AudioMath.rms(samples) > Chunker.SILENCE_RMS) {
+                    if (!Chunker.isSilent(samples)) {
                         val prompt = listOf(rec.course.takeIf { it.isNotBlank() }, promptTail.takeIf { it.isNotBlank() })
                             .filterNotNull().joinToString(". ")
                         val t0 = System.currentTimeMillis()
-                        val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads)
+                        val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
                         // Velocità misurata sull'audio originale coperto (silenzi saltati inclusi)
                         eta.record(window.endMs - chunkStartMs, System.currentTimeMillis() - t0)
-                        speeds.put(s.modelId, eta.speed)
+                        speeds.put(modelId, eta.speed)
                         ServiceState.speed.value = eta.speed
                         coroutineContext.ensureActive()
                         if (raw == null) error("Errore durante la trascrizione")
@@ -146,8 +158,10 @@ class Transcriber(
                                 startMs = window.toSourceMs(r.startMs),
                                 endMs = window.toSourceMs(r.endMs),
                                 text = text,
+                                pass = if (isFinal) Pass.FINAL else Pass.DRAFT,
                             )
                         }
+                        if (isFinal) dao.deleteDraftOverlapping(id, chunkStartMs, window.endMs)
                         if (segments.isNotEmpty()) {
                             dao.insertSegments(segments)
                             promptTail = (promptTail + " " + segments.joinToString(" ") { it.text }).takeLast(PROMPT_CHARS)
@@ -159,6 +173,7 @@ class Transcriber(
                     exporter.autoExport(id)
                 }
             }
+            if (isFinal) dao.deleteDraft(id)
             dao.setTranscription(id, TxState.DONE)
             exporter.autoExport(id)
             if (s.compressAudio && tempWav == null) compress(id, wav)

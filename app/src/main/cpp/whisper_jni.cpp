@@ -87,7 +87,7 @@ Java_it_registratoreai_transcription_WhisperLib_requestAbort(JNIEnv *, jobject, 
 JNIEXPORT jint JNICALL
 Java_it_registratoreai_transcription_WhisperLib_transcribe(JNIEnv *env, jobject, jlong ptr,
                                                            jfloatArray samples, jstring language,
-                                                           jstring prompt, jint threads) {
+                                                           jstring prompt, jint threads, jint beamSize) {
     auto *ctx = reinterpret_cast<whisper_context *>(ptr);
     if (!ctx) return -1;
 
@@ -106,7 +106,10 @@ Java_it_registratoreai_transcription_WhisperLib_transcribe(JNIEnv *env, jobject,
         env->ReleaseStringUTFChars(prompt, p);
     }
 
-    whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    // Beam search: più robusto sull'audio difficile; con Large v3 Turbo costa pochissimo
+    // perché il decoder ha solo 4 strati (l'encoder, che domina il tempo, gira una volta sola).
+    whisper_full_params params = whisper_full_default_params(beamSize > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
+    if (beamSize > 1) params.beam_search.beam_size = beamSize;
     params.print_realtime = false;
     params.print_progress = false;
     params.print_timestamps = false;

@@ -68,13 +68,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import it.registratoreai.app
+import it.registratoreai.data.Pass
 import it.registratoreai.data.RecState
+import it.registratoreai.data.SummaryState
 import it.registratoreai.data.Recording
 import it.registratoreai.data.TxState
 import it.registratoreai.text.ExportFormat
 import it.registratoreai.service.CaptureService
 import it.registratoreai.service.ServiceState
 import it.registratoreai.service.TxProgress
+import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.formatEta
 import it.registratoreai.transcription.modelById
 import it.registratoreai.text.formatDate
@@ -240,15 +243,13 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
                 // ---- Stato trascrizione
                 TranscriptionPanel(r, tx?.takeIf { it.recordingId == id }, id in queue, settings.modelId in installed,
                     onTranscribe = { restart ->
-                        scope.launch {
-                            if (restart) withContext(Dispatchers.IO) {
-                                dao.deleteSegments(id); dao.setTranscribedUntil(id, 0)
-                            }
-                            CaptureService.send(ctx, CaptureService.ACTION_TRANSCRIBE, id)
-                        }
+                        // "Ritrascrivi" usa il modello finale e sostituisce il testo man mano, senza cancellarlo
+                        CaptureService.send(ctx, if (restart) CaptureService.ACTION_REFINE else CaptureService.ACTION_TRANSCRIBE, id)
                     },
                     onCancel = { CaptureService.send(ctx, CaptureService.ACTION_CANCEL_TX, id) },
                 )
+
+                SummaryCard(r, onSummarize = { CaptureService.send(ctx, CaptureService.ACTION_SUMMARIZE, id) })
 
                 if (searching) {
                     OutlinedTextField(
@@ -344,6 +345,8 @@ private fun TranscriptionPanel(
     val settings by app.settings.state.collectAsState()
     val liveSpeed by ServiceState.speed.collectAsState()
     val speed = liveSpeed ?: app.transcriber.speedFor(settings.modelId)
+    val installedModels by app.models.installed.collectAsState()
+    val finalReady = settings.finalModelId in installedModels
     Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Column(Modifier.padding(12.dp)) {
             when {
@@ -354,7 +357,15 @@ private fun TranscriptionPanel(
                     TextButton(onClick = onCancel) { Text("Annulla") }
                 }
                 tx != null -> {
-                    Text("Trascrizione in corso… ${(tx.fraction * 100).toInt()}%", fontWeight = FontWeight.Medium)
+                    Text(
+                        if (rec.pass == Pass.FINAL) "Trascrizione finale con ${modelById(rec.modelId).name}… ${(tx.fraction * 100).toInt()}%"
+                        else "Trascrizione in corso… ${(tx.fraction * 100).toInt()}%",
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (rec.pass == Pass.FINAL) Text(
+                        "Il testo qui sotto migliora man mano che avanza.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     Text(
                         tx.etaMs?.let { "Fine stimata tra ${formatEta(it)}" } ?: "Calcolo del tempo rimanente…",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
@@ -372,6 +383,11 @@ private fun TranscriptionPanel(
                     TextButton(onClick = onCancel) { Text("Annulla") }
                 }
                 !modelReady -> Text("Scarica un modello di trascrizione dalle Impostazioni per trascrivere questa lezione.")
+                rec.transcription == TxState.DONE && rec.pass != Pass.FINAL && finalReady &&
+                    canonicalModelId(rec.modelId) != canonicalModelId(settings.finalModelId) -> Column {
+                    Text("Anteprima con Whisper ${modelById(rec.modelId).name}", style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = { onTranscribe(true) }) { Text("Migliora con ${modelById(settings.finalModelId).name}") }
+                }
                 rec.transcription == TxState.DONE -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "Trascritta con Whisper ${modelById(rec.modelId).name}",
@@ -392,6 +408,48 @@ private fun TranscriptionPanel(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryCard(rec: Recording, onSummarize: () -> Unit) {
+    val app = LocalContext.current.app
+    val settings by app.settings.state.collectAsState()
+    val installed by app.summaryModels.installed.collectAsState()
+    val running by ServiceState.summary.collectAsState()
+    var expanded by remember(rec.id) { mutableStateOf(false) }
+    val progress = running?.takeIf { it.first == rec.id }?.second
+    val ready = settings.summaryModelId in installed
+    val canRun = rec.transcription == TxState.DONE && rec.state == RecState.DONE
+    if (rec.summary == null && !ready && progress == null) return
+    Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Riassunto", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                when {
+                    progress != null -> {}
+                    rec.summary != null -> TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Chiudi" else "Leggi") }
+                    rec.summaryState == SummaryState.QUEUED -> Text("In coda", style = MaterialTheme.typography.labelMedium)
+                    canRun && ready -> TextButton(onClick = onSummarize) { Text("Genera") }
+                }
+            }
+            when {
+                progress != null -> {
+                    Text("L'IA sul telefono sta leggendo la lezione… ${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+                    LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth().padding(top = 4.dp))
+                }
+                rec.summaryState == SummaryState.ERROR -> Text("Riassunto non riuscito.", color = MaterialTheme.colorScheme.error)
+                rec.summary != null && expanded -> {
+                    MarkdownText(rec.summary, Modifier.padding(top = 4.dp))
+                    if (canRun && ready) TextButton(onClick = onSummarize) { Text("Rigenera") }
+                }
+                rec.summary != null -> Text(
+                    rec.summary.lineSequence().firstOrNull { it.isNotBlank() && !it.startsWith("#") }?.let { inline(it).text } ?: "",
+                    style = MaterialTheme.typography.bodySmall, maxLines = 3,
+                )
+                !canRun -> Text("Verrà creato al termine della trascrizione.", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

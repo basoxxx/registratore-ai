@@ -5,8 +5,13 @@ import it.registratoreai.audio.WavReader
 import it.registratoreai.audio.WavWriter
 import it.registratoreai.audio.samplesToMs
 import it.registratoreai.text.TextSegment
+import it.registratoreai.summary.LlamaLib
+import it.registratoreai.summary.SUMMARY_MODELS
+import it.registratoreai.summary.Summarizer
 import it.registratoreai.transcription.Chunker
 import it.registratoreai.transcription.EtaEstimator
+import it.registratoreai.transcription.beamSizeFor
+import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.SpeechPacker
 import it.registratoreai.transcription.WhisperVad
 import it.registratoreai.transcription.SpeedStore
@@ -44,6 +49,10 @@ class DesktopApp {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val nativeOk = Native.load()
     val models = ModelStore(File(Paths.dataDir, "models"))
+    val summaryModels = ModelStore(File(Paths.dataDir, "llm"), SUMMARY_MODELS)
+    /** Riassunto in corso: id lezione e avanzamento. */
+    val summaryProgress = MutableStateFlow<Pair<String, Float>?>(null)
+    private val summaryQueue = ArrayDeque<String>()
     private val engine by lazy { WhisperEngine() }
 
     private val _settings = MutableStateFlow(DesktopSettings.load())
@@ -131,6 +140,8 @@ class DesktopApp {
         _lessons.value.filter { it.status == TxStatus.QUEUED || it.status == TxStatus.RUNNING }
             .sortedBy { it.createdAt }
             .forEach { enqueue(it.id) }
+        _lessons.value.filter { it.summaryStatus == TxStatus.QUEUED || it.summaryStatus == TxStatus.RUNNING }
+            .forEach { summarize(it.id) }
     }
 
     // ------------------------------------------------------------------ Registrazione
@@ -177,7 +188,10 @@ class DesktopApp {
         val l = lesson(live.lessonId) ?: return
         val s = _settings.value
         val queued = currentTx == l.id || l.id in queue.value
-        if (!queued && s.autoTranscribe && l.status == TxStatus.NONE && models.isInstalled(s.modelId)) enqueue(l.id)
+        if (!queued && s.autoTranscribe && l.status == TxStatus.NONE &&
+            (models.isInstalled(s.modelId) || models.isInstalled(s.finalModelId))
+        ) transcribe(l.id, restart = false)
+        if (!queued && l.status == TxStatus.DONE) afterTranscription(l.id)
     }
 
     // ------------------------------------------------------------------ Import / modifica
@@ -190,7 +204,7 @@ class DesktopApp {
         val lesson = Lesson(dir = dir, title = title, createdAt = now, durationMs = ms)
         store.save(lesson, _settings.value.timestamps)
         _lessons.update { listOf(lesson) + it }
-        if (models.isInstalled(_settings.value.modelId)) enqueue(lesson.id)
+        if (models.isInstalled(_settings.value.modelId) || models.isInstalled(_settings.value.finalModelId)) transcribe(lesson.id, restart = false)
         lesson.id
     } catch (e: Exception) {
         messages.value = "Formato non supportato: importa un file WAV o AIFF (${e.message})"
@@ -212,9 +226,70 @@ class DesktopApp {
 
     // ------------------------------------------------------------------ Trascrizione
 
+    /**
+     * restart = false: trascrive (direttamente con il modello finale se è scaricato);
+     * restart = true: ritrascrive con il modello finale mantenendo visibile il testo attuale.
+     */
     fun transcribe(id: String, restart: Boolean) {
-        if (restart) mutate(id) { it.copy(segments = emptyList(), transcribedUntilMs = 0, status = TxStatus.NONE, error = null) }
+        val s = _settings.value
+        val l = lesson(id) ?: return
+        val finalReady = models.isInstalled(s.finalModelId)
+        if (restart || (finalReady && l.segments.isEmpty())) {
+            if (finalReady) mutate(id) { it.copy(pass = 2, transcribedUntilMs = 0, status = TxStatus.QUEUED, error = null) }
+            else mutate(id) { it.copy(segments = emptyList(), transcribedUntilMs = 0, status = TxStatus.NONE, error = null) }
+        }
         enqueue(id)
+    }
+
+    /** Dopo l'anteprima parte la trascrizione finale con il modello grande (se diverso e scaricato). */
+    private fun afterTranscription(id: String) {
+        val l = lesson(id) ?: return
+        if (l.status != TxStatus.DONE || l.recording) return
+        val s = _settings.value
+        if (l.pass == 1 && s.refineAfter && models.isInstalled(s.finalModelId) &&
+            canonicalModelId(l.modelId) != canonicalModelId(s.finalModelId)
+        ) {
+            mutate(id) { it.copy(pass = 2, transcribedUntilMs = 0, status = TxStatus.QUEUED) }
+            enqueue(id)
+        } else if (s.autoSummary && summaryModels.isInstalled(s.summaryModelId) && l.summaryStatus == TxStatus.NONE) {
+            summarize(id)
+        }
+    }
+
+    // ------------------------------------------------------------------ Riassunto
+
+    fun summarize(id: String) {
+        if (!summaryModels.isInstalled(_settings.value.summaryModelId)) return
+        scope.launch {
+            queueLock.withLock {
+                if (id in summaryQueue || summaryProgress.value?.first == id) return@launch
+                summaryQueue.addLast(id)
+            }
+            mutate(id) { it.copy(summaryStatus = TxStatus.QUEUED) }
+            ensureWorker()
+        }
+    }
+
+    private suspend fun runSummary(id: String) {
+        val l = lesson(id) ?: return
+        val path = summaryModels.pathFor(_settings.value.summaryModelId) ?: return
+        if (l.segments.isEmpty()) { mutate(id) { it.copy(summaryStatus = TxStatus.NONE) }; return }
+        mutate(id) { it.copy(summaryStatus = TxStatus.RUNNING) }
+        summaryProgress.value = id to 0f
+        engine.release() // libera la memoria di Whisper
+        try {
+            Summarizer(path, _settings.value.threads).use { s ->
+                val text = s.summarize(l.info(), l.segments) { p -> summaryProgress.value = id to p }
+                mutate(id) { it.copy(summary = text, summaryStatus = TxStatus.DONE) }
+            }
+        } catch (e: CancellationException) {
+            mutate(id) { it.copy(summaryStatus = TxStatus.NONE) }
+            throw e
+        } catch (e: Throwable) {
+            mutate(id) { it.copy(summaryStatus = TxStatus.ERROR, error = e.message) }
+        } finally {
+            summaryProgress.value = null
+        }
     }
 
     fun enqueue(id: String, front: Boolean = false) {
@@ -226,6 +301,13 @@ class DesktopApp {
                 if (front && currentTx != null) preempt = currentTx
             }
             mutate(id) { it.copy(status = TxStatus.QUEUED, error = null) }
+            // Una registrazione che inizia ha la precedenza anche su un riassunto in corso
+            val runningSummary = summaryProgress.value?.first
+            if (front && runningSummary != null) {
+                worker?.let { it.cancel(); if (nativeOk) LlamaLib.requestAbort(true); it.join() }
+                queueLock.withLock { summaryQueue.addFirst(runningSummary) }
+                mutate(runningSummary) { it.copy(summaryStatus = TxStatus.QUEUED) }
+            }
             preempt?.let { old ->
                 // La lezione che si sta registrando ha la precedenza
                 worker?.let { it.cancel(); abortNative(); it.join() }
@@ -238,7 +320,11 @@ class DesktopApp {
 
     fun cancel(id: String) {
         scope.launch {
-            queueLock.withLock { queue.value = queue.value - id }
+            queueLock.withLock { queue.value = queue.value - id; summaryQueue.remove(id) }
+            if (summaryProgress.value?.first == id) {
+                worker?.let { it.cancel(); if (nativeOk) LlamaLib.requestAbort(true); it.join() }
+                summaryProgress.value = null
+            }
             if (currentTx == id) {
                 worker?.let { it.cancel(); abortNative(); it.join() }
                 currentTx = null
@@ -258,6 +344,8 @@ class DesktopApp {
                 } ?: break
                 try {
                     run(next)
+                    currentTx = null
+                    afterTranscription(next)
                 } catch (e: CancellationException) {
                     currentTx = null
                     throw e
@@ -267,6 +355,11 @@ class DesktopApp {
                 currentTx = null
                 progress.value = null
             }
+            // Riassunti quando non ci sono trascrizioni in coda e non si registra
+            while (recording.value == null) {
+                val next = queueLock.withLock { if (queue.value.isEmpty()) summaryQueue.removeFirstOrNull() else null } ?: break
+                runSummary(next)
+            }
         }
     }
 
@@ -274,18 +367,31 @@ class DesktopApp {
         val s = _settings.value
         val start = lesson(id) ?: return
         if (!nativeOk) error(Native.error ?: "Libreria di trascrizione non disponibile")
-        val path = models.pathFor(s.modelId) ?: error("Nessun modello scaricato: aprilo dalle Impostazioni.")
+        // Passaggio finale: modello grande che sostituisce man mano il testo dell'anteprima
+        val isFinal = start.pass == 2
+        val modelId = if (isFinal && models.isInstalled(s.finalModelId)) s.finalModelId else s.modelId
+        val beam = beamSizeFor(modelId)
+        val path = models.pathFor(modelId) ?: error("Nessun modello scaricato: aprilo dalle Impostazioni.")
         if (!engine.ensureLoaded(path)) error("Impossibile caricare il modello: riscaricalo dalle Impostazioni.")
-        var lesson = mutate(id) { it.copy(status = TxStatus.RUNNING, modelId = s.modelId, language = s.language) } ?: return
+        var lesson = mutate(id) {
+            it.copy(status = TxStatus.RUNNING, modelId = modelId, language = s.language, pass = if (it.pass == 0) 1 else it.pass)
+        } ?: return
 
-        eta = EtaEstimator(speeds.get(s.modelId))
+        eta = EtaEstimator(speeds.get(modelId))
         speed.value = eta.speed
         // Dopo la lezione: VAD + impacchettamento del parlato (vedi SpeechPacker)
         val packer = vad()?.let { SpeechPacker(it) } ?: SpeechPacker { null }
         var offsetMs = start.transcribedUntilMs
-        var segments = lesson.segments.filter { it.startMs < offsetMs }
-        var promptTail = segments.takeLast(6).joinToString(" ") { it.text }.takeLast(200)
-        var lastText = segments.lastOrNull()?.text
+        // Ripresa dopo un'interruzione: si scarta quanto prodotto oltre l'ultimo punto salvato
+        // (nel passaggio finale solo il testo "finale": l'anteprima resta finché non è sostituita)
+        var segments = if (isFinal) lesson.segments.filter { it.pass < 2 || it.startMs < offsetMs }
+        else lesson.segments.filter { it.startMs < offsetMs }
+        val context = segments.filter { !isFinal || it.pass == 2 }.takeLast(6)
+        var promptTail = context.joinToString(" ") { it.text }.takeLast(200)
+        var lastText = context.lastOrNull()?.text
+        /** Nel passaggio finale toglie l'anteprima nel tratto [from, to) appena ritrascritto. */
+        fun dropDraft(list: List<TextSegment>, from: Long, to: Long) =
+            if (!isFinal) list else list.filterNot { it.pass < 2 && it.startMs < to && it.endMs > from }
 
         WavReader(lesson.audio).use { reader ->
             while (true) {
@@ -294,9 +400,11 @@ class DesktopApp {
                 val window = when (val c = packer.next(reader, offsetMs, live)) {
                     is Chunker.Chunk.Audio -> c.window
                     is Chunker.Chunk.Skip -> {
+                        segments = dropDraft(segments, offsetMs, c.endMs)
                         offsetMs = c.endMs
                         val until = offsetMs
-                        lesson = mutate(id) { it.copy(transcribedUntilMs = until) } ?: return
+                        val segs = segments
+                        lesson = mutate(id) { it.copy(segments = segs, transcribedUntilMs = until) } ?: return
                         continue
                     }
                     Chunker.Chunk.End -> break
@@ -308,12 +416,12 @@ class DesktopApp {
                 }
                 val samples = window.samples
                 val chunkStart = offsetMs
-                if (AudioMath.rms(samples) > Chunker.SILENCE_RMS) {
+                if (!Chunker.isSilent(samples)) {
                     val prompt = listOf(lesson.course, promptTail).filter { it.isNotBlank() }.joinToString(". ")
                     val t0 = System.currentTimeMillis()
-                    val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads)
+                    val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
                     eta.record(window.endMs - chunkStart, System.currentTimeMillis() - t0)
-                    speeds.put(s.modelId, eta.speed)
+                    speeds.put(modelId, eta.speed)
                     speed.value = eta.speed
                     coroutineContext.ensureActive()
                     raw ?: error("Errore durante la trascrizione")
@@ -322,9 +430,9 @@ class DesktopApp {
                         val text = TextCleaner.clean(r.text) ?: continue
                         if (lastText != null && text.equals(lastText, ignoreCase = true)) continue
                         lastText = text
-                        fresh += TextSegment(window.toSourceMs(r.startMs), window.toSourceMs(r.endMs), text)
+                        fresh += TextSegment(window.toSourceMs(r.startMs), window.toSourceMs(r.endMs), text, if (isFinal) 2 else 1)
                     }
-                    segments = segments + fresh
+                    segments = (dropDraft(segments, chunkStart, window.endMs) + fresh).sortedBy { it.startMs }
                     if (fresh.isNotEmpty()) promptTail = (promptTail + " " + fresh.joinToString(" ") { it.text }).takeLast(200)
                 }
                 offsetMs = window.endMs
@@ -334,7 +442,7 @@ class DesktopApp {
                 progress.value = progressOf(id, offsetMs, samplesToMs(reader.availableSamples()))
             }
         }
-        mutate(id) { it.copy(status = TxStatus.DONE) }
+        mutate(id) { l -> l.copy(status = TxStatus.DONE, segments = if (isFinal) l.segments.filter { it.pass == 2 } else l.segments) }
     }
 
     private fun progressOf(id: String, processed: Long, total: Long) =
