@@ -19,6 +19,8 @@ data class AppSettings(
     val autoSummary: Boolean,
     /** Modello linguistico per il riassunto. */
     val summaryModelId: String,
+    /** Continua trascrizione e riassunto anche a schermo spento / dispositivo in standby. */
+    val keepAwake: Boolean,
     val language: String,
     /** Trascrive durante la registrazione (aggiornamenti in tempo reale). */
     val liveTranscription: Boolean,
@@ -49,6 +51,7 @@ class Settings(context: Context) {
         refineAfter = prefs.getBoolean("refineAfter", true),
         autoSummary = prefs.getBoolean("autoSummary", true),
         summaryModelId = prefs.getString("summaryModelId", defaultSummaryModel())!!,
+        keepAwake = prefs.getBoolean("keepAwake", true),
         language = prefs.getString("language", "it")!!,
         liveTranscription = prefs.getBoolean("live", true),
         autoTranscribe = prefs.getBoolean("autoTranscribe", true),
@@ -68,6 +71,7 @@ class Settings(context: Context) {
             .putBoolean("refineAfter", s.refineAfter)
             .putBoolean("autoSummary", s.autoSummary)
             .putString("summaryModelId", s.summaryModelId)
+            .putBoolean("keepAwake", s.keepAwake)
             .putString("language", s.language)
             .putBoolean("live", s.liveTranscription)
             .putBoolean("autoTranscribe", s.autoTranscribe)

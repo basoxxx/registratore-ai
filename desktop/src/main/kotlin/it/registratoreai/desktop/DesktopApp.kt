@@ -8,7 +8,11 @@ import it.registratoreai.text.TextSegment
 import it.registratoreai.summary.LlamaLib
 import it.registratoreai.summary.SUMMARY_MODELS
 import it.registratoreai.summary.Summarizer
+import it.registratoreai.transcription.CUSTOM_MODEL_ID
 import it.registratoreai.transcription.Chunker
+import it.registratoreai.transcription.QualityCheck
+import it.registratoreai.transcription.crossCheckModelFor
+import it.registratoreai.transcription.modelById
 import it.registratoreai.transcription.EtaEstimator
 import it.registratoreai.transcription.beamSizeFor
 import it.registratoreai.transcription.canonicalModelId
@@ -54,6 +58,8 @@ class DesktopApp {
     val summaryProgress = MutableStateFlow<Pair<String, Float>?>(null)
     private val summaryQueue = ArrayDeque<String>()
     private val engine by lazy { WhisperEngine() }
+    /** Secondo modello per la verifica incrociata dei tratti sospetti. */
+    private val backupEngine by lazy { WhisperEngine() }
 
     private val _settings = MutableStateFlow(DesktopSettings.load())
     val settings = _settings.asStateFlow()
@@ -168,6 +174,7 @@ class DesktopApp {
             },
         )
         recorder = rec
+        SleepGuard.acquire("recording") // in standby la registrazione si fermerebbe
         rec.start()
         if (s.liveTranscription && models.isInstalled(s.modelId)) enqueue(lesson.id, front = true)
         return lesson.id
@@ -185,6 +192,7 @@ class DesktopApp {
         rec.stop()
         mutate(live.lessonId) { it.copy(recording = false, durationMs = rec.elapsedMs) }
         recording.value = null
+        SleepGuard.release("recording")
         val l = lesson(live.lessonId) ?: return
         val s = _settings.value
         val queued = currentTx == l.id || l.id in queue.value
@@ -277,6 +285,7 @@ class DesktopApp {
         mutate(id) { it.copy(summaryStatus = TxStatus.RUNNING) }
         summaryProgress.value = id to 0f
         engine.release() // libera la memoria di Whisper
+        backupEngine.release()
         try {
             Summarizer(path, _settings.value.threads).use { s ->
                 val text = s.summarize(l.info(), l.segments) { p -> summaryProgress.value = id to p }
@@ -338,6 +347,13 @@ class DesktopApp {
     private fun ensureWorker() {
         if (worker?.isActive == true) return
         worker = scope.launch {
+            if (_settings.value.keepAwake) SleepGuard.acquire("work")
+            try { workLoop() } finally { SleepGuard.release("work") }
+        }
+    }
+
+    private suspend fun workLoop() {
+        run {
             while (true) {
                 val next = queueLock.withLock {
                     queue.value.firstOrNull()?.also { queue.value = queue.value.drop(1); currentTx = it }
@@ -419,7 +435,17 @@ class DesktopApp {
                 if (!Chunker.isSilent(samples)) {
                     val prompt = listOf(lesson.course, promptTail).filter { it.isNotBlank() }.joinToString(". ")
                     val t0 = System.currentTimeMillis()
-                    val raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
+                    var raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
+                    if (isFinal && raw != null) {
+                        // Tratto sospetto (ripetizioni, troppo poco testo…): seconda opinione dall'altro modello grande
+                        val speech = window.pieces.sumOf { it.lenMs }
+                        val first = QualityCheck.evaluate(raw.map { it.text }, speech)
+                        val otherPath = if (first.suspicious) crossCheckModelFor(modelId)?.let { models.pathFor(it) } else null
+                        if (otherPath != null && backupEngine.ensureLoaded(otherPath)) {
+                            val alt = backupEngine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, 5)
+                            if (alt != null && QualityCheck.secondIsBetter(first, QualityCheck.evaluate(alt.map { it.text }, speech))) raw = alt
+                        }
+                    }
                     eta.record(window.endMs - chunkStart, System.currentTimeMillis() - t0)
                     speeds.put(modelId, eta.speed)
                     speed.value = eta.speed
@@ -472,5 +498,14 @@ class DesktopApp {
     fun shutdown() {
         stopRecording()
         abortNative()
+        SleepGuard.release("work")
+        SleepGuard.release("recording")
+    }
+
+    /** Importa un modello Whisper scelto dall'utente; false se il file non è valido. */
+    suspend fun importModel(file: File): Boolean {
+        val ok = models.import(modelById(CUSTOM_MODEL_ID), file.inputStream())
+        if (ok) updateSettings { it.copy(finalModelId = CUSTOM_MODEL_ID) }
+        return ok
     }
 }

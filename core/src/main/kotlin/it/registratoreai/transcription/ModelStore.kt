@@ -9,6 +9,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.coroutines.coroutineContext
@@ -19,11 +20,23 @@ data class WhisperModel(
     val description: String,
     val fileName: String,
     val sizeBytes: Long,
+    /**
+     * Numero di pezzi in cui il file è pubblicato: le release di GitHub accettano file fino a
+     * 2 GiB, quindi i modelli più grandi sono divisi (con `split -b`) in pezzi da [PART_SIZE].
+     */
+    val parts: Int = 1,
+    val baseUrl: String = MODELS_BASE_URL,
 ) {
     /** I modelli sono pubblicati come file della release "models" di questo repository. */
-    val url get() = "$MODELS_BASE_URL/$fileName"
+    val url get() = "$baseUrl/$fileName"
     val sizeMb get() = sizeBytes / 1_000_000
+
+    /** URL del pezzo [i]: suffissi di `split` (".part-aa", ".part-ab", ...). */
+    fun partUrl(i: Int) = if (parts == 1) url else "$url.part-a${'a' + i}"
 }
+
+/** Dimensione dei pezzi dei modelli divisi (deve coincidere con `split -b 1900M` nel workflow). */
+const val PART_SIZE = 1900L * 1024 * 1024
 
 const val MODELS_BASE_URL = "https://github.com/basoxxx/registratore-ai/releases/download/models"
 
@@ -34,11 +47,22 @@ val MODELS = listOf(
     WhisperModel("tiny-q8_0", "Tiny", "Velocissimo, qualità base. Solo per telefoni molto datati.", "ggml-tiny-q8_0.bin", 43_537_433),
     WhisperModel("base-q8_0", "Base", "Leggero: anteprima in tempo reale su qualsiasi telefono.", "ggml-base-q8_0.bin", 81_768_585),
     WhisperModel("small-q8_0", "Small", "Consigliato per il tempo reale: buona precisione in italiano.", "ggml-small-q8_0.bin", 264_464_607),
-    WhisperModel("large-v3-turbo-q8_0", "Large v3 Turbo", "Massima precisione, anche con audio difficile. Ideale per la trascrizione finale.", "ggml-large-v3-turbo-q8_0.bin", 874_188_075),
+    WhisperModel("large-v3-turbo-q8_0", "Large v3 Turbo", "Molto preciso e circa 2 volte più veloce di Large v3.", "ggml-large-v3-turbo-q8_0.bin", 874_188_075),
+    WhisperModel("large-v3-q8_0", "Large v3", "Il più preciso in assoluto: consigliato per la trascrizione finale, anche con audio difficile. Più lento.", "ggml-large-v3-q8_0.bin", LARGE_V3_SIZE),
+    WhisperModel(CUSTOM_MODEL_ID, "Modello personalizzato", "Un modello Whisper in formato ggml (.bin) caricato da te.", "ggml-custom.bin", 0),
 )
 
-/** Modello consigliato per la trascrizione finale dopo la lezione. */
-const val FINAL_MODEL_ID = "large-v3-turbo-q8_0"
+/** Dimensione di Large v3 Q8_0 generato dal workflow "Modelli Whisper". */
+const val LARGE_V3_SIZE = 1_656_538_283L
+
+/** Modello Whisper importato dall'utente (file .bin in formato ggml). */
+const val CUSTOM_MODEL_ID = "custom"
+
+/**
+ * Modello consigliato per la trascrizione finale dopo la lezione: Large v3 completo, il più
+ * preciso sull'audio difficile (misurato su una lezione reale), anche se più lento di Turbo.
+ */
+const val FINAL_MODEL_ID = "large-v3-q8_0"
 
 /** Modelli sostituiti da versioni migliori: id vecchio -> id nuovo. */
 private val REPLACED = mapOf(
@@ -69,10 +93,28 @@ fun modelById(id: String): WhisperModel = canonicalModelId(id).let { c -> MODELS
  * perché il decoder di Large v3 Turbo ha solo 4 strati. Per i modelli piccoli (tempo reale)
  * resta la decodifica greedy, più rapida.
  */
-fun beamSizeFor(id: String): Int = if (canonicalModelId(id).startsWith("large")) 5 else 1
+fun beamSizeFor(id: String): Int = canonicalModelId(id).let { if (it.startsWith("large") || it == CUSTOM_MODEL_ID) 5 else 1 }
+
+/**
+ * Seconda opinione per la verifica incrociata dei tratti sospetti (vedi [QualityCheck]):
+ * Large v3 e Large v3 Turbo sbagliano in punti diversi, quindi si controllano a vicenda.
+ */
+fun crossCheckModelFor(id: String): String? = when (canonicalModelId(id)) {
+    "large-v3-q8_0" -> "large-v3-turbo-q8_0"
+    "large-v3-turbo-q8_0" -> "large-v3-q8_0"
+    CUSTOM_MODEL_ID -> "large-v3-q8_0"
+    else -> null
+}
+
+/** I modelli Whisper ggml iniziano con la "magic" 0x67676d6c ("lmgg" su disco). */
+fun isWhisperModelHeader(head: ByteArray) = head.size >= 4 && String(head, 0, 4, Charsets.ISO_8859_1) == "lmgg"
 
 /** Download e gestione dei modelli Whisper in una cartella locale (Android e desktop). */
-class ModelStore(private val dir: File, private val catalog: List<WhisperModel> = MODELS) {
+class ModelStore(
+    private val dir: File,
+    private val catalog: List<WhisperModel> = MODELS,
+    private val partSize: Long = PART_SIZE,
+) {
     init {
         dir.mkdirs()
         OBSOLETE_FILES.forEach { File(dir, it).delete(); File(dir, "$it.part").delete() }
@@ -107,6 +149,24 @@ class ModelStore(private val dir: File, private val catalog: List<WhisperModel> 
 
     fun pathFor(id: String): String? = usableFile(byId(id))?.absolutePath
 
+    /**
+     * Importa un modello scelto dall'utente (es. un Whisper ggml scaricato altrove).
+     * Restituisce false se il file non è un modello Whisper valido.
+     */
+    suspend fun import(model: WhisperModel, input: java.io.InputStream): Boolean = withContext(Dispatchers.IO) {
+        val tmp = File(dir, model.fileName + ".import")
+        input.use { i -> tmp.outputStream().use { i.copyTo(it, 1 shl 20) } }
+        val head = ByteArray(4).also { b -> tmp.inputStream().use { it.read(b) } }
+        if (!isWhisperModelHeader(head)) {
+            tmp.delete()
+            return@withContext false
+        }
+        file(model).delete()
+        tmp.renameTo(file(model))
+        rescan()
+        true
+    }
+
     fun delete(model: WhisperModel) {
         file(model).delete()
         legacyFile(model)?.delete()
@@ -117,56 +177,22 @@ class ModelStore(private val dir: File, private val catalog: List<WhisperModel> 
     suspend fun download(model: WhisperModel) = withContext(Dispatchers.IO) {
         if (_downloads.value.containsKey(model.id)) return@withContext
         _downloads.update { it + (model.id to 0f) }
-        val part = File(dir, model.fileName + ".part")
+        val tmp = File(dir, model.fileName + ".part")
         try {
-            var url = URL(model.url)
-            var conn: HttpURLConnection
-            var redirects = 0
-            while (true) {
-                conn = url.openConnection() as HttpURLConnection
-                conn.instanceFollowRedirects = false
-                conn.connectTimeout = 20_000
-                conn.readTimeout = 30_000
-                if (part.exists()) conn.setRequestProperty("Range", "bytes=${part.length()}-")
-                val code = conn.responseCode
-                if (code in 300..399 && redirects < 10) {
-                    url = URL(url, conn.getHeaderField("Location"))
-                    conn.disconnect()
-                    redirects++
-                    continue
+            var expected = model.sizeBytes
+            for (i in 0 until model.parts) {
+                val partStart = i * partSize
+                val last = i == model.parts - 1
+                if (!last && tmp.length() >= partStart + partSize) continue // pezzo già scaricato
+                val total = fetch(model.partUrl(i), tmp, partStart) { done ->
+                    _downloads.update { it + (model.id to (done.toFloat() / model.sizeBytes).coerceIn(0f, 1f)) }
                 }
-                break
+                if (!coroutineContext.isActive) error("Download interrotto")
+                if (model.parts == 1) total?.let { expected = it }
+                else if (!last && tmp.length() != partStart + partSize) error("Download incompleto")
             }
-            val code = conn.responseCode
-            if (code == 416 && part.length() > 0) {
-                // Il file parziale era già completo
-                part.renameTo(file(model))
-                legacyFile(model)?.delete()
-                return@withContext
-            }
-            val append = code == HttpURLConnection.HTTP_PARTIAL
-            if (code != HttpURLConnection.HTTP_OK && !append) error("HTTP $code")
-            var done = if (append) part.length() else 0L
-            // La dimensione reale viene dal server; quella in elenco serve solo come riferimento
-            val total = conn.contentLengthLong.takeIf { it > 0 }?.let { it + done } ?: model.sizeBytes
-            conn.inputStream.use { input ->
-                FileOutputStream(part, append).use { out ->
-                    val buf = ByteArray(64 * 1024)
-                    var lastEmit = 0L
-                    while (coroutineContext.isActive) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                        done += n
-                        if (done - lastEmit > 512 * 1024) {
-                            lastEmit = done
-                            _downloads.update { it + (model.id to (done.toFloat() / total).coerceIn(0f, 1f)) }
-                        }
-                    }
-                }
-            }
-            if (part.length() >= total) {
-                part.renameTo(file(model))
+            if (tmp.length() >= expected) {
+                tmp.renameTo(file(model))
                 // La versione precedente non serve più
                 legacyFile(model)?.delete()
             } else {
@@ -176,5 +202,56 @@ class ModelStore(private val dir: File, private val catalog: List<WhisperModel> 
             _downloads.update { it - model.id }
             rescan()
         }
+    }
+
+    /**
+     * Scarica [url] accodandolo a [out] a partire dalla posizione [start] del file, riprendendo
+     * da dove si era interrotto (header Range). Restituisce la dimensione finale attesa di [out].
+     */
+    private suspend fun fetch(url0: String, out: File, start: Long, onProgress: (Long) -> Unit): Long? {
+        val offset = (out.length() - start).coerceAtLeast(0)
+        var url = URL(url0)
+        var conn: HttpURLConnection
+        var redirects = 0
+        while (true) {
+            conn = url.openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = false
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 30_000
+            if (offset > 0) conn.setRequestProperty("Range", "bytes=$offset-")
+            val code = conn.responseCode
+            if (code in 300..399 && redirects < 10) {
+                url = URL(url, conn.getHeaderField("Location"))
+                conn.disconnect()
+                redirects++
+                continue
+            }
+            break
+        }
+        val code = conn.responseCode
+        if (code == 416 && offset > 0) return out.length() // questo pezzo era già completo
+        val resumed = code == HttpURLConnection.HTTP_PARTIAL
+        if (code != HttpURLConnection.HTTP_OK && !resumed) error("HTTP $code")
+        // Se il server ignora il Range si riscrive il pezzo da capo
+        if (!resumed) RandomAccessFile(out, "rw").use { it.setLength(start) }
+        var done = out.length()
+        val total = conn.contentLengthLong.takeIf { it > 0 }?.let { it + done }
+        conn.inputStream.use { input ->
+            FileOutputStream(out, true).use { o ->
+                val buf = ByteArray(64 * 1024)
+                var lastEmit = 0L
+                while (coroutineContext.isActive) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    o.write(buf, 0, n)
+                    done += n
+                    if (done - lastEmit > 512 * 1024) {
+                        lastEmit = done
+                        onProgress(done)
+                    }
+                }
+            }
+        }
+        return total
     }
 }

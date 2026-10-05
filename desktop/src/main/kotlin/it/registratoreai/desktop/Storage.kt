@@ -144,6 +144,8 @@ data class DesktopSettings(
     val refineAfter: Boolean = true,
     val autoSummary: Boolean = true,
     val summaryModelId: String = "qwen3-4b-q4_k_m",
+    /** Impedisce lo standby del computer finché trascrizione e riassunto non sono finiti. */
+    val keepAwake: Boolean = true,
     val language: String = "it",
     val liveTranscription: Boolean = true,
     val autoTranscribe: Boolean = true,
@@ -165,6 +167,7 @@ data class DesktopSettings(
                 refineAfter = p.getProperty("refineAfter", "${d.refineAfter}").toBoolean(),
                 autoSummary = p.getProperty("autoSummary", "${d.autoSummary}").toBoolean(),
                 summaryModelId = p.getProperty("summaryModelId", d.summaryModelId),
+                keepAwake = p.getProperty("keepAwake", "${d.keepAwake}").toBoolean(),
                 language = p.getProperty("language", d.language),
                 liveTranscription = p.getProperty("live", "${d.liveTranscription}").toBoolean(),
                 autoTranscribe = p.getProperty("autoTranscribe", "${d.autoTranscribe}").toBoolean(),
@@ -179,7 +182,7 @@ data class DesktopSettings(
     fun save() {
         val p = Properties()
         p["modelId"] = modelId; p["finalModelId"] = finalModelId; p["refineAfter"] = "$refineAfter"
-        p["autoSummary"] = "$autoSummary"; p["summaryModelId"] = summaryModelId; p["language"] = language; p["live"] = "$liveTranscription"
+        p["autoSummary"] = "$autoSummary"; p["summaryModelId"] = summaryModelId; p["keepAwake"] = "$keepAwake"; p["language"] = language; p["live"] = "$liveTranscription"
         p["autoTranscribe"] = "$autoTranscribe"; p["threads"] = "$threads"; p["timestamps"] = "$timestamps"
         p["libraryDir"] = libraryDir; p["checkUpdates"] = "$checkUpdates"
         file.outputStream().use { p.store(it, "Registratore Lezioni") }

@@ -65,6 +65,10 @@ jobs:
         include:
           - os: macos-14
             target: macos-arm64
+            dmg: RegistratoreLezioni-macOS.dmg
+          - os: macos-15-intel
+            target: macos-x64
+            dmg: RegistratoreLezioni-macOS-Intel.dmg
           - os: windows-latest
             target: windows-x64
     runs-on: ${{ matrix.os }}
@@ -106,10 +110,10 @@ jobs:
           ln -s /Applications dmg/Applications
           # hdiutil sulle macchine di GitHub fallisce a volte con "Resource busy" (XProtect): si ripete
           for i in 1 2 3 4 5; do
-            hdiutil create -volname "Registratore Lezioni" -srcfolder dmg -ov -format UDZO dist/RegistratoreLezioni-macOS.dmg && break
+            hdiutil create -volname "Registratore Lezioni" -srcfolder dmg -ov -format UDZO dist/${{ matrix.dmg }} && break
             echo "hdiutil occupato, nuovo tentativo tra $((i * 10)) s"; sleep $((i * 10))
           done
-          test -f dist/RegistratoreLezioni-macOS.dmg
+          test -f dist/${{ matrix.dmg }}
 
       - name: Installer Windows (.msi)
         if: runner.os == 'Windows'

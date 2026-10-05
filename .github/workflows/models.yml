@@ -17,18 +17,36 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Scarica i modelli ufficiali whisper.cpp (Q8_0)
         run: |
           mkdir models && cd models
           for f in ggml-tiny-q8_0.bin ggml-base-q8_0.bin ggml-small-q8_0.bin ggml-large-v3-turbo-q8_0.bin; do
             curl -fL --retry 5 --retry-delay 5 -o "$f" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$f"
           done
+          # Large v3 completo in Q8_0 (non pubblicato già pronto): si quantizza dal modello originale
+          cd ..
+          cmake -S third_party/whisper.cpp -B qbuild -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_SDL2=OFF -DGGML_OPENMP=OFF > /dev/null
+          cmake --build qbuild -j 4 --target quantize
+          curl -fL --retry 5 --retry-delay 5 -o large-v3-f16.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
+          qbuild/bin/quantize large-v3-f16.bin models/ggml-large-v3-q8_0.bin q8_0
+          rm large-v3-f16.bin
+          cd models
           # Modelli linguistici per il riassunto (Qwen3, licenza Apache 2.0)
           for f in Qwen3-4B-Q4_K_M.gguf Qwen3-1.7B-Q4_K_M.gguf; do
             repo="unsloth/${f%-Q4_K_M.gguf}-GGUF"
             curl -fL --retry 5 --retry-delay 5 -o "$f" "https://huggingface.co/$repo/resolve/main/$f"
           done
+          # Le release di GitHub accettano file fino a 2 GiB: i più grandi vanno in pezzi da 1900 MiB
+          # (l'app li scarica e li riunisce; vedi PART_SIZE in ModelStore.kt)
           sha256sum *.bin *.gguf > SHA256SUMS
+          for f in *.gguf *.bin; do
+            if [ $(stat -c %s "$f") -gt 2000000000 ]; then split -b 1900M "$f" "$f.part-" && rm "$f"; fi
+          done
+          ls -la
           ls -la
 
       - uses: softprops/action-gh-release@v2

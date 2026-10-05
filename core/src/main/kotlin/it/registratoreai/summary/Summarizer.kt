@@ -27,7 +27,7 @@ object LlamaLib {
 
 /** Modelli linguistici per il riassunto (pubblicati nella release "models" del repository). */
 val SUMMARY_MODELS = listOf(
-    WhisperModel("qwen3-4b-q4_k_m", "Qwen3 4B", "Consigliato: riassunti accurati e fedeli. Serve un telefono con almeno 6 GB di RAM.", "Qwen3-4B-Q4_K_M.gguf", 2_497_281_312),
+    WhisperModel("qwen3-4b-q4_k_m", "Qwen3 4B", "Consigliato: riassunti accurati e fedeli. Serve un telefono con almeno 6 GB di RAM.", "Qwen3-4B-Q4_K_M.gguf", 2_497_281_312, parts = 2),
     WhisperModel("qwen3-1.7b-q4_k_m", "Qwen3 1.7B", "Leggero e veloce, per telefoni con poca memoria: più impreciso.", "Qwen3-1.7B-Q4_K_M.gguf", 1_107_409_472),
 )
 

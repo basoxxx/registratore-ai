@@ -55,8 +55,8 @@ Java_it_registratoreai_transcription_WhisperLib_initContext(JNIEnv *env, jobject
     }
     const char *path = env->GetStringUTFChars(modelPath, nullptr);
     whisper_context_params cparams = whisper_context_default_params();
-#if defined(__APPLE__) && !defined(__ANDROID__)
-    cparams.use_gpu = true;     // Metal sui Mac
+#if defined(__APPLE__) && defined(__aarch64__)
+    cparams.use_gpu = true;     // Metal sui Mac Apple Silicon
     cparams.flash_attn = true;  // più veloce su GPU (su CPU invece rallenta: misurato -20%)
 #else
     cparams.use_gpu = false;

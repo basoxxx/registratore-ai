@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -53,6 +54,7 @@ import androidx.documentfile.provider.DocumentFile
 import it.registratoreai.BuildConfig
 import it.registratoreai.app
 import it.registratoreai.summary.SUMMARY_MODELS
+import it.registratoreai.transcription.CUSTOM_MODEL_ID
 import it.registratoreai.transcription.MODELS
 import it.registratoreai.transcription.modelById
 import it.registratoreai.update.UpdateChecker
@@ -72,6 +74,22 @@ fun SettingsScreen(onBack: () -> Unit) {
     val s by app.settings.state.collectAsState()
     val installed by app.models.installed.collectAsState()
     val upgradable by app.models.upgradable.collectAsState()
+    var importing by remember { mutableStateOf(false) }
+    val importModel = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            importing = true
+            app.appScope.launch {
+                val ok = runCatching {
+                    app.models.import(modelById(CUSTOM_MODEL_ID), ctx.contentResolver.openInputStream(uri)!!)
+                }.getOrDefault(false)
+                withContext(Dispatchers.Main) {
+                    importing = false
+                    Toast.makeText(ctx, if (ok) "Modello caricato" else "Il file non è un modello Whisper (.bin ggml)", Toast.LENGTH_LONG).show()
+                    if (ok) app.settings.update { it.copy(finalModelId = CUSTOM_MODEL_ID) }
+                }
+            }
+        }
+    }
     val summaryInstalled by app.summaryModels.installed.collectAsState()
     val summaryDownloads by app.summaryModels.downloads.collectAsState()
     val downloads by app.models.downloads.collectAsState()
@@ -119,6 +137,21 @@ fun SettingsScreen(onBack: () -> Unit) {
             MODELS.forEach { m ->
                 val isInstalled = m.id in installed
                 val needsUpgrade = m.id in upgradable
+                if (m.id == CUSTOM_MODEL_ID) {
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(m.name, fontWeight = FontWeight.Medium)
+                                Text(m.description, style = MaterialTheme.typography.bodySmall)
+                                if (importing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
+                                else if (isInstalled) Text("Caricato", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                            if (isInstalled) IconButton(onClick = { app.models.delete(m) }) { Icon(Icons.Default.Delete, "Elimina modello") }
+                            else if (!importing) TextButton(onClick = { importModel.launch(arrayOf("*/*")) }) { Text("Importa") }
+                        }
+                    }
+                    return@forEach
+                }
                 val progress = downloads[m.id]
                 Card(Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -144,7 +177,8 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             Text("Tempo reale (anteprima durante la lezione)", fontWeight = FontWeight.Medium)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                MODELS.forEach { m ->
+                // Per il tempo reale solo i modelli abbastanza veloci
+                MODELS.take(4).forEach { m ->
                     FilterChip(selected = s.modelId == m.id, onClick = { app.settings.update { it.copy(modelId = m.id) } },
                         label = { Text(m.name.substringBefore(" ")) })
                 }
@@ -154,8 +188,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                 "Appena finisce la lezione ritrascrive tutto con il modello scelto qui sotto, sostituendo l'anteprima.",
                 s.refineAfter,
             ) { v -> app.settings.update { it.copy(refineAfter = v) } }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                MODELS.drop(2).forEach { m ->
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                MODELS.drop(2).filter { it.id != CUSTOM_MODEL_ID || it.id in installed }.forEach { m ->
                     FilterChip(selected = s.finalModelId == m.id, onClick = { app.settings.update { it.copy(finalModelId = m.id) } },
                         label = { Text(m.name) })
                 }
@@ -202,6 +236,24 @@ fun SettingsScreen(onBack: () -> Unit) {
                         }
                     }
                 }
+            }
+
+            Section("Lavoro in background")
+            Toggle(
+                "Continua anche a schermo spento",
+                "Trascrizione finale e riassunto proseguono con il tablet o il telefono in standby. " +
+                    "Se disattivato, il lavoro si mette in pausa quando lo schermo si spegne e riprende dopo.",
+                s.keepAwake,
+            ) { v ->
+                app.settings.update { it.copy(keepAwake = v) }
+                if (v) requestBatteryExemption(ctx)
+            }
+            if (s.keepAwake && !isIgnoringBatteryOptimizations(ctx)) {
+                Text(
+                    "Il risparmio energetico di Android può comunque fermare l'app: consenti l'uso della batteria senza restrizioni.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                )
+                TextButton(onClick = { requestBatteryExemption(ctx) }) { Text("Consenti") }
             }
 
             Section("Lingua delle lezioni")
@@ -304,5 +356,19 @@ private fun Toggle(title: String, subtitle: String?, checked: Boolean, onChange:
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+private fun isIgnoringBatteryOptimizations(ctx: android.content.Context): Boolean =
+    ctx.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName)
+
+@android.annotation.SuppressLint("BatteryLife")
+private fun requestBatteryExemption(ctx: android.content.Context) {
+    if (isIgnoringBatteryOptimizations(ctx)) return
+    runCatching {
+        ctx.startActivity(
+            Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:${ctx.packageName}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 }
