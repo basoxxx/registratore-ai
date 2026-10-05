@@ -204,19 +204,26 @@ class DesktopApp {
 
     // ------------------------------------------------------------------ Import / modifica
 
-    fun importAudio(file: File): String? = try {
+    fun importAudio(file: File): String? {
         val now = System.currentTimeMillis()
         val title = file.nameWithoutExtension
         val dir = store.newLessonDir(title, now).apply { mkdirs() }
+        return try {
+            importInto(dir, file, title, now)
+        } catch (e: Exception) {
+            dir.deleteRecursively()
+            messages.value = "Impossibile leggere ${file.name}: formato non supportato (${e.message})"
+            null
+        }
+    }
+
+    private fun importInto(dir: File, file: File, title: String, now: Long): String {
         val ms = AudioImport.toWav16k(file, File(dir, "audio.wav"))
         val lesson = Lesson(dir = dir, title = title, createdAt = now, durationMs = ms)
         store.save(lesson, _settings.value.timestamps)
         _lessons.update { listOf(lesson) + it }
         if (models.isInstalled(_settings.value.modelId) || models.isInstalled(_settings.value.finalModelId)) transcribe(lesson.id, restart = false)
-        lesson.id
-    } catch (e: Exception) {
-        messages.value = "Formato non supportato: importa un file WAV o AIFF (${e.message})"
-        null
+        return lesson.id
     }
 
     fun rename(id: String, title: String, course: String) {

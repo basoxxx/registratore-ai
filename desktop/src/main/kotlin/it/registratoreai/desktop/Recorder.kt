@@ -1,6 +1,7 @@
 package it.registratoreai.desktop
 
 import it.registratoreai.audio.Resampler
+import it.registratoreai.audio.SAMPLE_RATE
 import it.registratoreai.audio.WavWriter
 import it.registratoreai.audio.samplesToMs
 import java.io.File
@@ -104,36 +105,104 @@ class Recorder(
     }
 }
 
-/** Importa un file WAV/AIFF qualsiasi convertendolo in WAV 16 kHz mono. */
+/** Riceve l'audio decodificato: [frames] campioni per canale, interlacciati. */
+fun interface PcmSink {
+    fun pcm(data: FloatArray, frames: Int, channels: Int, rate: Int)
+}
+
+/** Decodifica nativa (AVFoundation su macOS, Media Foundation su Windows) dentro whisper_jni. */
+object NativeAudio {
+    /** 0 se ok, negativo in caso di errore (-100: non disponibile su questo sistema). */
+    @JvmStatic
+    external fun decode(path: String, sink: PcmSink): Int
+}
+
+/**
+ * Importa un file audio o video (wav, mp3, m4a, aac, mp4, mov, …) convertendolo in WAV 16 kHz mono.
+ * Prova Java Sound (WAV/AIFF), poi il decoder del sistema operativo, infine ffmpeg se installato.
+ */
 object AudioImport {
+    /** Decoder usato dall'ultima importazione riuscita (per i test). */
+    @Volatile
+    var lastDecoder = ""
+        private set
+
     fun toWav16k(source: File, out: File): Long {
-        val input = AudioSystem.getAudioInputStream(source)
-        val pcmFormat = AudioFormat(input.format.sampleRate, 16, input.format.channels, true, false)
-        val pcm = AudioSystem.getAudioInputStream(pcmFormat, input)
-        val channels = pcmFormat.channels
-        val rate = pcmFormat.sampleRate.toInt()
+        val errors = mutableListOf<String>()
+        for ((name, decoder) in listOf<Pair<String, (File, PcmSink) -> Unit>>(
+            "Java Sound" to ::javaSound, "sistema" to ::system, "ffmpeg" to ::ffmpeg,
+        )) {
+            try {
+                return write(out) { sink -> decoder(source, sink) }.also { lastDecoder = name }
+            } catch (e: Throwable) {
+                errors += "$name: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+        out.delete()
+        throw IllegalArgumentException(errors.joinToString("; "))
+    }
+
+    /** Scrive in [out] l'audio prodotto da [decode] (mescolato in mono e portato a 16 kHz). */
+    private fun write(out: File, decode: (PcmSink) -> Unit): Long {
         val resampler = Resampler()
-        val buf = ByteArray(rate * channels * 2)
         WavWriter(out).use { w ->
-            while (true) {
-                val n = pcm.read(buf)
-                if (n <= 0) break
-                val frames = n / (2 * channels)
+            decode { data, frames, channels, rate ->
                 val mono = FloatArray(frames) { f ->
-                    var s = 0
-                    for (c in 0 until channels) {
-                        val i = (f * channels + c) * 2
-                        s += (buf[i].toInt() and 0xff) or (buf[i + 1].toInt() shl 8)
-                    }
-                    s.toFloat() / channels
+                    var s = 0f
+                    for (c in 0 until channels) s += data[f * channels + c]
+                    s / channels * 32768f
                 }
                 val res = resampler.process(mono, rate)
                 val shorts = ShortArray(res.size) { res[it].toInt().coerceIn(-32768, 32767).toShort() }
                 w.write(shorts, shorts.size)
             }
-            pcm.close()
+            check(w.samplesWritten > 0) { "nessun audio" }
             return samplesToMs(w.samplesWritten)
         }
     }
-}
 
+    private fun javaSound(source: File, sink: PcmSink) {
+        val input = AudioSystem.getAudioInputStream(source)
+        val pcmFormat = AudioFormat(input.format.sampleRate, 16, input.format.channels, true, false)
+        AudioSystem.getAudioInputStream(pcmFormat, input).use { pcm ->
+            val channels = pcmFormat.channels
+            val rate = pcmFormat.sampleRate.toInt()
+            val buf = ByteArray(rate * channels * 2)
+            while (true) {
+                val n = pcm.read(buf)
+                if (n <= 0) break
+                val frames = n / (2 * channels)
+                val data = FloatArray(frames * channels) { i ->
+                    ((buf[2 * i].toInt() and 0xff) or (buf[2 * i + 1].toInt() shl 8)) / 32768f
+                }
+                sink.pcm(data, frames, channels, rate)
+            }
+        }
+    }
+
+    private fun system(source: File, sink: PcmSink) {
+        val r = NativeAudio.decode(source.absolutePath, sink)
+        check(r == 0) { if (r == -100) "non disponibile" else "errore $r" }
+    }
+
+    private fun ffmpeg(source: File, sink: PcmSink) {
+        val p = ProcessBuilder("ffmpeg", "-nostdin", "-v", "error", "-i", source.absolutePath,
+            "-vn", "-ac", "1", "-ar", "$SAMPLE_RATE", "-f", "s16le", "-")
+            .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        val buf = ByteArray(SAMPLE_RATE * 2)
+        var carry = -1
+        p.inputStream.use { input ->
+            while (true) {
+                var n = input.read(buf, if (carry >= 0) 1 else 0, buf.size - 1)
+                if (n <= 0) break
+                if (carry >= 0) { buf[0] = carry.toByte(); n++ }
+                val frames = n / 2
+                carry = if (n % 2 == 1) buf[n - 1].toInt() else -1
+                sink.pcm(FloatArray(frames) { i ->
+                    ((buf[2 * i].toInt() and 0xff) or (buf[2 * i + 1].toInt() shl 8)) / 32768f
+                }, frames, 1, SAMPLE_RATE)
+            }
+        }
+        check(p.waitFor() == 0) { "codice ${p.exitValue()}" }
+    }
+}

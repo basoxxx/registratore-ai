@@ -269,7 +269,7 @@ private fun Sidebar(app: DesktopApp, frame: Frame, selected: String?, onSelect: 
         HorizontalDivider()
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = {
-                chooseFile(frame, "Importa audio (WAV/AIFF)")?.let { f ->
+                chooseFile(frame, "Importa audio o video (mp3, m4a, wav, mp4…)")?.let { f ->
                     scope.launch(Dispatchers.IO) { app.importAudio(f)?.let { onSelect(Pane.Detail(it)) } }
                 }
             }) { Icon(Icons.Default.FileOpen, null); Spacer(Modifier.width(4.dp)); Text("Importa") }
