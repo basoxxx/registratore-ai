@@ -171,7 +171,7 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("Registratore Lezioni") },
                 actions = {
-                    IconButton(onClick = { picker.launch(arrayOf("audio/*")) }) {
+                    IconButton(onClick = { picker.launch(arrayOf("audio/*", "video/*")) }) {
                         Icon(Icons.Default.FileOpen, "Importa audio")
                     }
                     IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Impostazioni") }
