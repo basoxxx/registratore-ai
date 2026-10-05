@@ -90,6 +90,7 @@ import it.registratoreai.text.formatDuration
 import it.registratoreai.text.formatShortDate
 import it.registratoreai.text.formatTimestamp
 import it.registratoreai.summary.SUMMARY_MODELS
+import it.registratoreai.transcription.CUSTOM_MODEL_ID
 import it.registratoreai.transcription.MODELS
 import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.formatEta
@@ -621,6 +622,7 @@ private fun SettingsPane(app: DesktopApp, frame: Frame) {
     val s by app.settings.collectAsState()
     val installed by app.models.installed.collectAsState()
     val upgradable by app.models.upgradable.collectAsState()
+    var importing by remember { mutableStateOf(false) }
     val summaryInstalled by app.summaryModels.installed.collectAsState()
     val summaryDownloads by app.summaryModels.downloads.collectAsState()
     val downloads by app.models.downloads.collectAsState()
@@ -636,6 +638,31 @@ private fun SettingsPane(app: DesktopApp, frame: Frame) {
         MODELS.forEach { m ->
             val p = downloads[m.id]
             val needsUpgrade = m.id in upgradable
+            if (m.id == CUSTOM_MODEL_ID) {
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(m.name, fontWeight = FontWeight.Medium)
+                            Text(m.description, style = MaterialTheme.typography.bodySmall)
+                            if (importing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
+                            else if (m.id in installed) Text("Caricato", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                        if (m.id in installed) TextButton(onClick = { app.models.delete(m) }) { Text("Elimina") }
+                        else if (!importing) TextButton(onClick = {
+                            chooseFile(frame, "Scegli un modello Whisper (.bin)")?.let { f ->
+                                importing = true
+                                scope.launch {
+                                    val ok = withContext(Dispatchers.IO) { runCatching { app.importModel(f) }.getOrDefault(false) }
+                                    importing = false
+                                    app.messages.value = if (ok) "Modello caricato: verrà usato per la trascrizione finale."
+                                    else "Il file non è un modello Whisper in formato ggml (.bin)."
+                                }
+                            }
+                        }) { Text("Importa…") }
+                    }
+                }
+                return@forEach
+            }
             Card(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -659,7 +686,7 @@ private fun SettingsPane(app: DesktopApp, frame: Frame) {
         }
         Text("Tempo reale (anteprima durante la lezione)", fontWeight = FontWeight.Medium)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            MODELS.forEach { m ->
+            MODELS.take(4).forEach { m ->
                 FilterChip(s.modelId == m.id, onClick = { app.updateSettings { it.copy(modelId = m.id) } }, label = { Text(m.name) })
             }
         }
@@ -667,7 +694,7 @@ private fun SettingsPane(app: DesktopApp, frame: Frame) {
             app.updateSettings { it.copy(refineAfter = v) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            MODELS.drop(2).forEach { m ->
+            MODELS.drop(2).filter { it.id != CUSTOM_MODEL_ID || it.id in installed }.forEach { m ->
                 FilterChip(s.finalModelId == m.id, onClick = { app.updateSettings { it.copy(finalModelId = m.id) } }, label = { Text(m.name) })
             }
         }
@@ -702,6 +729,14 @@ private fun SettingsPane(app: DesktopApp, frame: Frame) {
                 }
             }
         }
+
+        Section("Lavoro in background")
+        Toggle(
+            "Impedisci lo standby mentre lavora",
+            "Il computer non va in standby finché trascrizione e riassunto non sono finiti (lo schermo può spegnersi). " +
+                "Durante la registrazione lo standby è sempre impedito. Chiudere il coperchio del portatile lo sospende comunque.",
+            s.keepAwake,
+        ) { v -> app.updateSettings { it.copy(keepAwake = v) } }
 
         Section("Lingua delle lezioni")
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

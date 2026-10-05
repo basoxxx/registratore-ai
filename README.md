@@ -22,6 +22,8 @@ App per **Android, macOS e Windows** per **registrare le lezioni universitarie**
   finisce, Large v3 Turbo (Q8_0 + beam search) ritrascrive tutto e sostituisce il testo man mano.
 - **Riassunto automatico con IA locale** (llama.cpp + Qwen3, offline): "In breve", punti chiave,
   definizioni, cose da fare e scaletta della lezione con i minutaggi; incluso nel file Markdown.
+- **Lavoro in standby (a scelta)**: su telefono/tablet trascrizione e riassunto continuano a
+  schermo spento; su computer lo standby viene impedito finché il lavoro non è finito.
 - **Esportazione** in Markdown (`.md`) o testo (`.txt`), con timestamp per paragrafo:
   condividi, salva dove vuoi, copia negli appunti.
 - **Esportazione automatica**: scegli una cartella (es. il vault di Obsidian o una cartella
@@ -69,7 +71,9 @@ di questo repository (pubblicata dal workflow *Modelli Whisper*: i file superano
 | Tiny | 44 MB | Telefoni molto datati |
 | **Base** (anteprima predefinita) | 82 MB | Anteprima in tempo reale su qualsiasi telefono |
 | **Small** | 264 MB | Anteprima più precisa sui telefoni recenti |
-| **Large v3 Turbo** (finale) | 874 MB | Trascrizione finale: affidabile anche con audio difficile |
+| Large v3 Turbo | 874 MB | Trascrizione finale veloce, affidabile anche con audio difficile |
+| **Large v3** (finale predefinito) | 1,66 GB | Il più preciso: sui tratti difficili di una lezione reale corregge errori che Turbo commette |
+| Personalizzato | — | Qualsiasi modello Whisper ggml (.bin) caricato con "Importa" |
 
 Tutti in formato Q8_0: su una lezione reale registrata da lontano il Q4_0 perdeva frasi intere
 ("Grazie a tutti" al posto di 30 secondi di spiegazione), mentre il Q8_0 è veloce uguale e preciso.

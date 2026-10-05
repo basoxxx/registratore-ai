@@ -47,11 +47,22 @@ val MODELS = listOf(
     WhisperModel("tiny-q8_0", "Tiny", "Velocissimo, qualità base. Solo per telefoni molto datati.", "ggml-tiny-q8_0.bin", 43_537_433),
     WhisperModel("base-q8_0", "Base", "Leggero: anteprima in tempo reale su qualsiasi telefono.", "ggml-base-q8_0.bin", 81_768_585),
     WhisperModel("small-q8_0", "Small", "Consigliato per il tempo reale: buona precisione in italiano.", "ggml-small-q8_0.bin", 264_464_607),
-    WhisperModel("large-v3-turbo-q8_0", "Large v3 Turbo", "Massima precisione, anche con audio difficile. Ideale per la trascrizione finale.", "ggml-large-v3-turbo-q8_0.bin", 874_188_075),
+    WhisperModel("large-v3-turbo-q8_0", "Large v3 Turbo", "Molto preciso e circa 2 volte più veloce di Large v3.", "ggml-large-v3-turbo-q8_0.bin", 874_188_075),
+    WhisperModel("large-v3-q8_0", "Large v3", "Il più preciso in assoluto: consigliato per la trascrizione finale, anche con audio difficile. Più lento.", "ggml-large-v3-q8_0.bin", LARGE_V3_SIZE),
+    WhisperModel(CUSTOM_MODEL_ID, "Modello personalizzato", "Un modello Whisper in formato ggml (.bin) caricato da te.", "ggml-custom.bin", 0),
 )
 
-/** Modello consigliato per la trascrizione finale dopo la lezione. */
-const val FINAL_MODEL_ID = "large-v3-turbo-q8_0"
+/** Dimensione di Large v3 Q8_0 generato dal workflow "Modelli Whisper". */
+const val LARGE_V3_SIZE = 1_656_538_283L
+
+/** Modello Whisper importato dall'utente (file .bin in formato ggml). */
+const val CUSTOM_MODEL_ID = "custom"
+
+/**
+ * Modello consigliato per la trascrizione finale dopo la lezione: Large v3 completo, il più
+ * preciso sull'audio difficile (misurato su una lezione reale), anche se più lento di Turbo.
+ */
+const val FINAL_MODEL_ID = "large-v3-q8_0"
 
 /** Modelli sostituiti da versioni migliori: id vecchio -> id nuovo. */
 private val REPLACED = mapOf(
@@ -82,7 +93,10 @@ fun modelById(id: String): WhisperModel = canonicalModelId(id).let { c -> MODELS
  * perché il decoder di Large v3 Turbo ha solo 4 strati. Per i modelli piccoli (tempo reale)
  * resta la decodifica greedy, più rapida.
  */
-fun beamSizeFor(id: String): Int = if (canonicalModelId(id).startsWith("large")) 5 else 1
+fun beamSizeFor(id: String): Int = canonicalModelId(id).let { if (it.startsWith("large") || it == CUSTOM_MODEL_ID) 5 else 1 }
+
+/** I modelli Whisper ggml iniziano con la "magic" 0x67676d6c ("lmgg" su disco). */
+fun isWhisperModelHeader(head: ByteArray) = head.size >= 4 && String(head, 0, 4, Charsets.ISO_8859_1) == "lmgg"
 
 /** Download e gestione dei modelli Whisper in una cartella locale (Android e desktop). */
 class ModelStore(
@@ -123,6 +137,24 @@ class ModelStore(
     fun isInstalled(id: String) = usableFile(byId(id)) != null
 
     fun pathFor(id: String): String? = usableFile(byId(id))?.absolutePath
+
+    /**
+     * Importa un modello scelto dall'utente (es. un Whisper ggml scaricato altrove).
+     * Restituisce false se il file non è un modello Whisper valido.
+     */
+    suspend fun import(model: WhisperModel, input: java.io.InputStream): Boolean = withContext(Dispatchers.IO) {
+        val tmp = File(dir, model.fileName + ".import")
+        input.use { i -> tmp.outputStream().use { i.copyTo(it, 1 shl 20) } }
+        val head = ByteArray(4).also { b -> tmp.inputStream().use { it.read(b) } }
+        if (!isWhisperModelHeader(head)) {
+            tmp.delete()
+            return@withContext false
+        }
+        file(model).delete()
+        tmp.renameTo(file(model))
+        rescan()
+        true
+    }
 
     fun delete(model: WhisperModel) {
         file(model).delete()

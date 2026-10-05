@@ -8,7 +8,9 @@ import it.registratoreai.text.TextSegment
 import it.registratoreai.summary.LlamaLib
 import it.registratoreai.summary.SUMMARY_MODELS
 import it.registratoreai.summary.Summarizer
+import it.registratoreai.transcription.CUSTOM_MODEL_ID
 import it.registratoreai.transcription.Chunker
+import it.registratoreai.transcription.modelById
 import it.registratoreai.transcription.EtaEstimator
 import it.registratoreai.transcription.beamSizeFor
 import it.registratoreai.transcription.canonicalModelId
@@ -168,6 +170,7 @@ class DesktopApp {
             },
         )
         recorder = rec
+        SleepGuard.acquire("recording") // in standby la registrazione si fermerebbe
         rec.start()
         if (s.liveTranscription && models.isInstalled(s.modelId)) enqueue(lesson.id, front = true)
         return lesson.id
@@ -185,6 +188,7 @@ class DesktopApp {
         rec.stop()
         mutate(live.lessonId) { it.copy(recording = false, durationMs = rec.elapsedMs) }
         recording.value = null
+        SleepGuard.release("recording")
         val l = lesson(live.lessonId) ?: return
         val s = _settings.value
         val queued = currentTx == l.id || l.id in queue.value
@@ -338,6 +342,13 @@ class DesktopApp {
     private fun ensureWorker() {
         if (worker?.isActive == true) return
         worker = scope.launch {
+            if (_settings.value.keepAwake) SleepGuard.acquire("work")
+            try { workLoop() } finally { SleepGuard.release("work") }
+        }
+    }
+
+    private suspend fun workLoop() {
+        run {
             while (true) {
                 val next = queueLock.withLock {
                     queue.value.firstOrNull()?.also { queue.value = queue.value.drop(1); currentTx = it }
@@ -472,5 +483,14 @@ class DesktopApp {
     fun shutdown() {
         stopRecording()
         abortNative()
+        SleepGuard.release("work")
+        SleepGuard.release("recording")
+    }
+
+    /** Importa un modello Whisper scelto dall'utente; false se il file non è valido. */
+    suspend fun importModel(file: File): Boolean {
+        val ok = models.import(modelById(CUSTOM_MODEL_ID), file.inputStream())
+        if (ok) updateSettings { it.copy(finalModelId = CUSTOM_MODEL_ID) }
+        return ok
     }
 }

@@ -436,13 +436,16 @@ class CaptureService : Service() {
     private fun ensureWorker() {
         if (txJob?.isActive == true) return
         txJob = scope.launch {
-            acquireWakeLock()
+            // A schermo spento si continua solo se l'utente lo ha scelto (la registrazione invece
+            // tiene sempre sveglio il dispositivo)
+            if (app.settings.current.keepAwake) acquireWakeLock()
             while (true) {
                 val next = queueLock.withLock {
                     queue.removeFirstOrNull().also { currentTx = it; ServiceState.queue.value = queue.toList() }
                 } ?: break
                 try {
                     refreshNotification()
+                    if (app.settings.current.keepAwake) acquireWakeLock() // rinnova il timeout
                     app.transcriber.run(next)
                     currentTx = null
                     afterTranscription(next)
@@ -502,10 +505,12 @@ class CaptureService : Service() {
     // ---------------------------------------------------------------- Varie
 
     private fun acquireWakeLock() {
-        if (wakeLock?.isHeld == true) return
-        wakeLock = getSystemService(PowerManager::class.java)
+        // acquire() con timeout su un wake lock non contato rinnova la scadenza
+        val wl = wakeLock ?: getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RegistratoreAI:capture")
-            .apply { setReferenceCounted(false); acquire(8 * 60 * 60 * 1000L) }
+            .apply { setReferenceCounted(false) }
+        wl.acquire(10 * 60 * 60 * 1000L)
+        wakeLock = wl
     }
 
     private fun releaseWakeLock() {
