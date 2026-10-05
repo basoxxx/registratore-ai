@@ -1,5 +1,11 @@
 package it.registratoreai.ui.screens
 
+import it.registratoreai.text.Bookmarks
+import androidx.compose.material3.InputChip
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -18,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -213,6 +220,8 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
         val listState = rememberLazyListState()
         val visible = segments.filter { query.isBlank() || it.text.contains(query, ignoreCase = true) }
         val currentIdx = if (playing || position > 0) visible.indexOfLast { it.startMs <= position } else -1
+        val marks = Bookmarks.parse(r.bookmarks)
+        val starred = marks.mapNotNull { ms -> segments.lastOrNull { it.startMs <= ms } ?: segments.firstOrNull() }.map { it.id }.toSet()
 
         Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.padding(horizontal = 16.dp)) {
@@ -251,6 +260,35 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
 
                 SummaryCard(r, onSummarize = { CaptureService.send(ctx, CaptureService.ACTION_SUMMARIZE, id) })
 
+                // ---- Momenti segnati con ⭐ durante la registrazione
+                if (marks.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.Star, null, tint = MaterialTheme.colorScheme.tertiary)
+                        marks.forEach { ms ->
+                            InputChip(
+                                selected = false,
+                                onClick = {
+                                    seekTo(ms)
+                                    val idx = visible.indexOfLast { it.startMs <= ms }
+                                    if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                                },
+                                label = { Text(formatTimestamp(ms)) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Default.Close, "Togli", Modifier.size(16.dp).clickable {
+                                            scope.launch { dao.setBookmarks(id, Bookmarks.format(marks - ms)) }
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+
                 if (searching) {
                     OutlinedTextField(
                         query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
@@ -279,7 +317,10 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
                             .clickable { seekTo(s.startMs) }
                             .padding(8.dp)
                     ) {
-                        Text(formatTimestamp(s.startMs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            (if (s.id in starred) "⭐ " else "") + formatTimestamp(s.startMs),
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                        )
                         Text(s.text, style = MaterialTheme.typography.bodyLarge)
                     }
                 }

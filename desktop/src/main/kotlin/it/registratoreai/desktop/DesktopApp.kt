@@ -1,5 +1,6 @@
 package it.registratoreai.desktop
 
+import it.registratoreai.text.Bookmarks
 import it.registratoreai.audio.AudioMath
 import it.registratoreai.audio.WavReader
 import it.registratoreai.audio.WavWriter
@@ -184,6 +185,16 @@ class DesktopApp {
         return lesson.id
     }
 
+    /** "⭐ Segna": ricorda il momento attuale della registrazione (dagli ultimi 10 secondi). */
+    fun addBookmark() {
+        val live = recording.value ?: return
+        mutate(live.lessonId) { it.copy(bookmarks = Bookmarks.parse(Bookmarks.add(Bookmarks.format(it.bookmarks), live.elapsedMs))) }
+    }
+
+    fun removeBookmark(id: String, ms: Long) {
+        mutate(id) { it.copy(bookmarks = it.bookmarks - ms) }
+    }
+
     fun setPaused(paused: Boolean) {
         recorder?.paused = paused
         recording.update { it?.copy(paused = paused, level = 0f) }
@@ -299,7 +310,7 @@ class DesktopApp {
         backupEngine.release()
         try {
             Summarizer(path, _settings.value.threads).use { s ->
-                val text = s.summarize(l.info(), l.segments, glossaries.get(l.course)) { p -> summaryProgress.value = id to p }
+                val text = s.summarize(l.info(), l.segments, glossaries.get(l.course), l.bookmarks) { p -> summaryProgress.value = id to p }
                 mutate(id) { it.copy(summary = text, summaryStatus = TxStatus.DONE) }
             }
         } catch (e: CancellationException) {

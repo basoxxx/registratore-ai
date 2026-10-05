@@ -59,3 +59,25 @@ class PromptTest {
         org.junit.Assert.assertTrue(p.normalizeGlossary(long).length <= p.GLOSSARY_CHARS)
     }
 }
+
+class BookmarksTest {
+    @org.junit.Test
+    fun bookmarksAppearInMarkdown() {
+        val b = it.registratoreai.text.Bookmarks
+        val marks = b.parse(b.add(b.add("", 5_000), 70_000))
+        org.junit.Assert.assertEquals(listOf(0L, 60_000L), marks)
+        val segs = listOf(
+            it.registratoreai.text.TextSegment(0, 4_000, "Benvenuti alla lezione."),
+            it.registratoreai.text.TextSegment(58_000, 64_000, "Questo è il teorema fondamentale."),
+            it.registratoreai.text.TextSegment(64_000, 70_000, "Lo useremo all'esame."),
+        )
+        val md = it.registratoreai.text.TranscriptFormatter.build(
+            it.registratoreai.text.LessonInfo("L", "", 0, 70_000), segs,
+            it.registratoreai.text.ExportFormat.MARKDOWN, bookmarks = marks,
+        )
+        org.junit.Assert.assertTrue(md, md.contains("## ⭐ Momenti segnati"))
+        org.junit.Assert.assertTrue(md, md.contains("- **[00:01:00]** Questo è il teorema fondamentale. Lo useremo all'esame."))
+        org.junit.Assert.assertTrue(md, md.contains("⭐ **[00:00:58]** Questo è il teorema"))
+        org.junit.Assert.assertTrue(md, md.contains("## Trascrizione"))
+    }
+}

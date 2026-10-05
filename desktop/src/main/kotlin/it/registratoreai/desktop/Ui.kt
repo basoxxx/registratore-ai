@@ -1,5 +1,9 @@
 package it.registratoreai.desktop
 
+import androidx.compose.material3.InputChip
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -185,7 +189,12 @@ private fun Sidebar(app: DesktopApp, frame: Frame, selected: String?, onSelect: 
                             onClick = { scope.launch(Dispatchers.IO) { app.stopRecording() } },
                             colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.error),
                         ) { Icon(Icons.Default.Stop, "Stop") }
-                        Text("Stop salva la lezione", style = MaterialTheme.typography.bodySmall)
+                        FilledTonalIconButton(onClick = { app.addBookmark() }, enabled = !l.paused) {
+                            Icon(Icons.Default.Star, "Segna questo momento")
+                        }
+                        val marks = lessons.firstOrNull { it.id == l.lessonId }?.bookmarks?.size ?: 0
+                        Text(if (marks == 0) "⭐ segna un momento importante" else "⭐ $marks segnat${if (marks == 1) "o" else "i"}",
+                            style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -424,6 +433,7 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
 
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     LaunchedEffect(lesson.segments.size, lesson.recording) {
         if (lesson.recording && lesson.segments.isNotEmpty()) listState.animateScrollToItem(lesson.segments.size - 1)
@@ -510,18 +520,42 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
 
         SummaryCard(app, lesson)
 
+        if (lesson.bookmarks.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Star, null, tint = MaterialTheme.colorScheme.tertiary)
+                lesson.bookmarks.forEach { ms ->
+                    InputChip(
+                        selected = false,
+                        onClick = {
+                            query = ""
+                            val idx = lesson.segments.indexOfLast { it.startMs <= ms }
+                            if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
+                        },
+                        label = { Text(formatTimestamp(ms)) },
+                        trailingIcon = {
+                            Icon(Icons.Default.Close, "Togli", Modifier.size(16.dp).clickable { app.removeBookmark(id, ms) })
+                        },
+                    )
+                }
+            }
+        }
+
         OutlinedTextField(
             query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
             leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Cerca nella trascrizione") },
         )
         Spacer(Modifier.height(8.dp))
         val visible = lesson.segments.filter { query.isBlank() || it.text.contains(query, true) }
+        val starred = lesson.bookmarks.mapNotNull { ms -> lesson.segments.lastOrNull { it.startMs <= ms } ?: lesson.segments.firstOrNull() }.toSet()
         SelectionContainer(Modifier.weight(1f)) {
             LazyColumn(state = listState, contentPadding = PaddingValues(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (lesson.segments.isEmpty() && lesson.status == TxStatus.DONE) item { Text("Nessun parlato riconosciuto.") }
                 items(visible) { s ->
                     Row {
-                        Text(formatTimestamp(s.startMs), Modifier.width(76.dp), style = MaterialTheme.typography.labelMedium,
+                        Text((if (s in starred) "⭐" else "") + formatTimestamp(s.startMs), Modifier.width(92.dp), style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary, fontFamily = FontFamily.Monospace)
                         Text(s.text, style = MaterialTheme.typography.bodyLarge)
                     }

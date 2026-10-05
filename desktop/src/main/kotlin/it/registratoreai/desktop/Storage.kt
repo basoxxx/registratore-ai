@@ -1,5 +1,6 @@
 package it.registratoreai.desktop
 
+import it.registratoreai.text.Bookmarks
 import it.registratoreai.text.ExportFormat
 import it.registratoreai.text.LessonInfo
 import it.registratoreai.text.TextSegment
@@ -35,6 +36,8 @@ data class Lesson(
     val pass: Int = 0,
     val summary: String? = null,
     val summaryStatus: TxStatus = TxStatus.NONE,
+    /** Momenti segnati con "⭐ Segna" (ms dall'inizio). */
+    val bookmarks: List<Long> = emptyList(),
 ) {
     val id: String get() = dir.name
     val audio: File get() = File(dir, "audio.wav")
@@ -46,7 +49,7 @@ data class Lesson(
         partialUntilMs = if (status != TxStatus.DONE) transcribedUntilMs else null,
     )
 
-    fun export(format: ExportFormat, timestamps: Boolean) = TranscriptFormatter.build(info(), segments, format, timestamps, summary)
+    fun export(format: ExportFormat, timestamps: Boolean) = TranscriptFormatter.build(info(), segments, format, timestamps, summary, bookmarks)
 }
 
 class LessonStore(var root: File) {
@@ -80,6 +83,7 @@ class LessonStore(var root: File) {
             pass = j.optInt("pass", 0),
             summary = j.optString("summary").ifBlank { null },
             summaryStatus = runCatching { TxStatus.valueOf(j.optString("summaryStatus", "NONE")) }.getOrDefault(TxStatus.NONE),
+            bookmarks = Bookmarks.parse(j.optString("bookmarks", "")),
         )
     }
 
@@ -93,6 +97,7 @@ class LessonStore(var root: File) {
             .put("status", lesson.status.name).put("transcribedUntilMs", lesson.transcribedUntilMs)
             .put("modelId", lesson.modelId).put("language", lesson.language).put("error", lesson.error ?: "")
             .put("pass", lesson.pass).put("summary", lesson.summary ?: "").put("summaryStatus", lesson.summaryStatus.name)
+            .put("bookmarks", Bookmarks.format(lesson.bookmarks))
             .put("segments", JSONArray(lesson.segments.map {
                 JSONObject().put("start", it.startMs).put("end", it.endMs).put("text", it.text).put("pass", it.pass)
             }))

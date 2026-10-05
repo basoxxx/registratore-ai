@@ -1,5 +1,6 @@
 package it.registratoreai.summary
 
+import it.registratoreai.text.Bookmarks
 import it.registratoreai.text.LessonInfo
 import it.registratoreai.text.TextSegment
 import it.registratoreai.text.TranscriptFormatter
@@ -100,6 +101,14 @@ class Summarizer(private val modelPath: String, private val threads: Int) : Auto
         return stripThinking(String(bytes, Charsets.UTF_8))
     }
 
+    /** Passaggi segnati dallo studente con "⭐ Segna": vanno messi in evidenza. */
+    private fun highlights(segments: List<TextSegment>, bookmarks: List<Long>): String {
+        val ex = Bookmarks.excerpts(segments, bookmarks.take(12), words = 35)
+        if (ex.isEmpty()) return ""
+        return "Lo studente ha segnato come importanti questi passaggi: assicurati che compaiano nei punti chiave.\n" +
+            ex.joinToString("\n") { "- ${it.second}" } + "\n"
+    }
+
     /** Divide la trascrizione in parti da ~[PART_TOKENS] token rispettando i paragrafi. */
     fun split(segments: List<TextSegment>): List<Part> {
         val paragraphs = TranscriptFormatter.paragraphs(segments)
@@ -125,7 +134,8 @@ class Summarizer(private val modelPath: String, private val threads: Int) : Auto
     }
 
     suspend fun summarize(
-        info: LessonInfo, segments: List<TextSegment>, glossary: String = "", onProgress: (Float) -> Unit = {},
+        info: LessonInfo, segments: List<TextSegment>, glossary: String = "", bookmarks: List<Long> = emptyList(),
+        onProgress: (Float) -> Unit = {},
     ): String {
         check(load()) { "Impossibile caricare il modello per il riassunto" }
         val parts = split(segments)
@@ -176,6 +186,7 @@ class Summarizer(private val modelPath: String, private val threads: Int) : Auto
                 "## Punti chiave\n(da 5 a 10 punti elenco)\n" +
                 "## Concetti e definizioni\n(solo termini davvero definiti nella lezione, nel formato **termine**: spiegazione)\n" +
                 "## Da fare\n(SOLO se il docente cita esplicitamente esercizi, compiti, scadenze o avvisi; altrimenti ometti del tutto questa sezione)\n" +
+                highlights(segments, bookmarks) +
                 "Usa solo informazioni presenti negli appunti. Scrivi tutto in italiano. Non aggiungere altro testo prima o dopo.\n\n" +
                 "APPUNTI:\n${material.joinToString("\n\n")}",
             FINAL_MAX_TOKENS,

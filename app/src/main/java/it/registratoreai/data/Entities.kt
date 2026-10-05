@@ -41,6 +41,8 @@ data class Recording(
     /** Riassunto generato dall'IA locale (Markdown). */
     val summary: String? = null,
     val summaryState: SummaryState = SummaryState.NONE,
+    /** Momenti segnati con "⭐ Segna" (ms separati da virgola, vedi Bookmarks). */
+    val bookmarks: String = "",
 )
 
 @Entity(

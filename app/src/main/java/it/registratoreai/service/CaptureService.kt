@@ -75,6 +75,7 @@ class CaptureService : Service() {
         /** Genera (o rigenera) il riassunto con l'IA locale. */
         const val ACTION_SUMMARIZE = "summarize"
         const val ACTION_RESUME_PENDING = "resume_pending"
+        const val ACTION_BOOKMARK = "bookmark"
         const val EXTRA_ID = "id"
         const val EXTRA_TITLE = "title"
         const val EXTRA_COURSE = "course"
@@ -152,6 +153,9 @@ class CaptureService : Service() {
             ACTION_PAUSE -> setPaused(true)
             ACTION_RESUME -> setPaused(false)
             ACTION_STOP -> scope.launch { stopRecording() }
+            ACTION_BOOKMARK -> ServiceState.recording.value?.let { r ->
+                scope.launch { dao.addBookmark(r.recordingId, r.elapsedMs) }
+            }
             ACTION_TRANSCRIBE -> if (id > 0) scope.launch { transcribeLater(id) }
             ACTION_REFINE -> if (id > 0) scope.launch { dao.startFinalPass(id); enqueue(id) }
             ACTION_SUMMARIZE -> if (id > 0) scope.launch { enqueueSummary(id) }
@@ -203,6 +207,7 @@ class CaptureService : Service() {
             b.setContentText(formatDuration(rec.elapsedMs) + if (tx?.live == true) " · trascrizione in tempo reale" else "")
             if (rec.paused) b.addAction(0, "Riprendi", actionIntent(ACTION_RESUME))
             else b.addAction(0, "Pausa", actionIntent(ACTION_PAUSE))
+            b.addAction(0, "⭐ Segna", actionIntent(ACTION_BOOKMARK))
             b.addAction(0, "Stop", actionIntent(ACTION_STOP))
         } else if (ServiceState.summary.value != null) {
             val (_, p) = ServiceState.summary.value!!

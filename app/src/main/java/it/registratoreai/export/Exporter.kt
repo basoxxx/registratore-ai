@@ -11,6 +11,7 @@ import it.registratoreai.data.RecordingDao
 import it.registratoreai.data.Segment
 import it.registratoreai.data.Settings
 import it.registratoreai.data.TxState
+import it.registratoreai.text.Bookmarks
 import it.registratoreai.text.ExportFormat
 import it.registratoreai.text.LessonInfo
 import it.registratoreai.text.TextSegment
@@ -33,7 +34,7 @@ class Exporter(
                 partialUntilMs = if (rec.transcription != TxState.DONE) rec.transcribedUntilMs else null,
             ),
             segments.map { TextSegment(it.startMs, it.endMs, it.text) },
-            format, timestamps, rec.summary,
+            format, timestamps, rec.summary, Bookmarks.parse(rec.bookmarks),
         )
 
     fun fileName(rec: Recording, ext: String): String = TranscriptFormatter.fileName(rec.title, rec.createdAt, ext)

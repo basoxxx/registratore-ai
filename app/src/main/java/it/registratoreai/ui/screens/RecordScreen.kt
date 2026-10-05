@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,6 +50,7 @@ import it.registratoreai.data.Recording
 import it.registratoreai.data.Segment
 import it.registratoreai.service.CaptureService
 import it.registratoreai.service.ServiceState
+import it.registratoreai.text.Bookmarks
 import it.registratoreai.text.formatDuration
 import it.registratoreai.text.formatTimestamp
 import it.registratoreai.transcription.formatEta
@@ -135,8 +137,23 @@ fun RecordScreen(onBack: () -> Unit, onFinished: (Long) -> Unit) {
                 ) {
                     Icon(Icons.Default.Stop, "Stop", Modifier.size(40.dp))
                 }
+                FilledTonalIconButton(
+                    onClick = { CaptureService.send(ctx, CaptureService.ACTION_BOOKMARK) },
+                    enabled = live != null && !live!!.paused,
+                    modifier = Modifier.size(64.dp),
+                ) {
+                    Icon(Icons.Default.Star, "Segna questo momento", Modifier.size(32.dp))
+                }
             }
-            Spacer(Modifier.height(20.dp))
+            val marks = Bookmarks.parse(rec?.bookmarks).size
+            Text(
+                if (marks == 0) "⭐ segna un momento importante (gli ultimi 10 secondi)"
+                else "⭐ $marks moment${if (marks == 1) "o segnato" else "i segnati"}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Spacer(Modifier.height(12.dp))
 
             val liveTx = tx?.takeIf { it.recordingId == id }
             Text(
