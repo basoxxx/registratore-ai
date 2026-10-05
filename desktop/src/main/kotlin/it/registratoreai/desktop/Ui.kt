@@ -83,6 +83,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import it.registratoreai.transcription.GlossaryStore
 import it.registratoreai.text.ExportFormat
 import it.registratoreai.text.TranscriptFormatter
 import it.registratoreai.text.formatDate
@@ -282,6 +283,7 @@ private fun Sidebar(app: DesktopApp, frame: Frame, selected: String?, onSelect: 
     if (showNew) {
         NewRecordingDialog(
             courses = lessons.map { it.course }.filter { it.isNotBlank() }.distinct().take(6),
+            glossaries = app.glossaries,
             onDismiss = { showNew = false },
             onStart = { title, course ->
                 showNew = false
@@ -302,10 +304,13 @@ private fun statusLabel(l: Lesson, p: TxProgress?, queued: Boolean): String = wh
 }
 
 @Composable
-private fun NewRecordingDialog(courses: List<String>, onDismiss: () -> Unit, onStart: (String, String) -> Unit) {
+private fun NewRecordingDialog(
+    courses: List<String>, glossaries: GlossaryStore, onDismiss: () -> Unit, onStart: (String, String) -> Unit,
+) {
     val defaultTitle = remember { "Lezione del " + SimpleDateFormat("d MMMM yyyy", Locale.ITALY).format(Date()) }
     var title by remember { mutableStateOf(defaultTitle) }
     var course by remember { mutableStateOf(courses.firstOrNull() ?: "") }
+    var glossary by remember(course) { mutableStateOf(glossaries.get(course)) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Nuova registrazione") },
@@ -319,14 +324,29 @@ private fun NewRecordingDialog(courses: List<String>, onDismiss: () -> Unit, onS
                         Text(c, Modifier.fillMaxWidth().clickable { course = c }.padding(vertical = 3.dp), color = MaterialTheme.colorScheme.primary)
                     }
                 }
+                if (course.isNotBlank()) GlossaryField(glossary) { glossary = it }
             }
         },
         confirmButton = {
-            Button(onClick = { onStart(title.ifBlank { defaultTitle }, course.trim()) }) {
+            Button(onClick = {
+                glossaries.set(course, glossary)
+                onStart(title.ifBlank { defaultTitle }, course.trim())
+            }) {
                 Icon(Icons.Default.Mic, null); Spacer(Modifier.width(6.dp)); Text("Inizia")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annulla") } },
+    )
+}
+
+/** Parole chiave del corso: Whisper le usa come contesto e le scrive correttamente. */
+@Composable
+private fun GlossaryField(value: String, enabled: Boolean = true, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value, onChange, enabled = enabled, minLines = 2, maxLines = 4, modifier = Modifier.width(420.dp),
+        label = { Text("Parole chiave del corso") },
+        placeholder = { Text("es. teorema di Bayes, eteroschedasticità, Keynes") },
+        supportingText = { Text(if (enabled) "Termini tecnici e nomi separati da virgole: verranno trascritti correttamente" else "Indica prima il corso") },
     )
 }
 
@@ -428,7 +448,7 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
             }
             Action(Icons.Default.PlayArrow, "Ascolta") { open(lesson.audio) }
             Action(Icons.Default.Folder, "Cartella") { open(lesson.dir) }
-            Action(Icons.Default.Edit, "Rinomina") { renaming = true }
+            Action(Icons.Default.Edit, "Modifica") { renaming = true }
             Action(Icons.Default.Delete, "Elimina", enabled = !lesson.recording) { deleting = true }
         }
 
@@ -513,16 +533,24 @@ private fun DetailPane(app: DesktopApp, frame: Frame, id: String, onDeleted: () 
     if (renaming) {
         var title by remember { mutableStateOf(lesson.title) }
         var course by remember { mutableStateOf(lesson.course) }
+        var glossary by remember(course) { mutableStateOf(app.glossaries.get(course)) }
         AlertDialog(
             onDismissRequest = { renaming = false },
-            title = { Text("Rinomina") },
+            title = { Text("Modifica") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(title, { title = it }, label = { Text("Titolo") }, singleLine = true)
                     OutlinedTextField(course, { course = it }, label = { Text("Corso") }, singleLine = true)
+                    GlossaryField(glossary, enabled = course.isNotBlank()) { glossary = it }
                 }
             },
-            confirmButton = { Button(onClick = { renaming = false; app.rename(id, title.ifBlank { lesson.title }, course.trim()) }) { Text("Salva") } },
+            confirmButton = {
+                Button(onClick = {
+                    renaming = false
+                    app.glossaries.set(course, glossary)
+                    app.rename(id, title.ifBlank { lesson.title }, course.trim())
+                }) { Text("Salva") }
+            },
             dismissButton = { TextButton(onClick = { renaming = false }) { Text("Annulla") } },
         )
     }

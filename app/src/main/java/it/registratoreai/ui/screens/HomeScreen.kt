@@ -54,6 +54,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -395,11 +397,13 @@ private fun NewRecordingDialog(courses: List<String>, onDismiss: () -> Unit, onS
     val defaultTitle = remember { "Lezione del " + SimpleDateFormat("d MMMM yyyy", Locale.ITALY).format(Date()) }
     var title by remember { mutableStateOf(defaultTitle) }
     var course by remember { mutableStateOf(courses.firstOrNull() ?: "") }
+    val settings = LocalContext.current.app.settings
+    var glossary by remember(course) { mutableStateOf(settings.glossary(course)) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Nuova registrazione") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("Titolo") }, singleLine = true)
                 OutlinedTextField(
                     course, { course = it }, label = { Text("Corso (aiuta la trascrizione)") }, singleLine = true,
@@ -414,10 +418,14 @@ private fun NewRecordingDialog(courses: List<String>, onDismiss: () -> Unit, onS
                         )
                     }
                 }
+                if (course.isNotBlank()) GlossaryField(glossary) { glossary = it }
             }
         },
         confirmButton = {
-            Button(onClick = { onStart(title.ifBlank { defaultTitle }, course.trim()) }) {
+            Button(onClick = {
+                settings.setGlossary(course, glossary)
+                onStart(title.ifBlank { defaultTitle }, course.trim())
+            }) {
                 Icon(Icons.Default.Mic, null); Spacer(Modifier.width(6.dp)); Text("Inizia")
             }
         },

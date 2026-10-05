@@ -131,6 +131,7 @@ class Transcriber(
         val previous = (if (isFinal) dao.lastFinalSegments(id, 6) else dao.lastSegments(id, 6)).reversed()
         var promptTail = previous.joinToString(" ") { it.text }.takeLast(PROMPT_CHARS)
         var lastText = previous.lastOrNull()?.text
+        val glossary = settings.glossary(rec.course)
 
         try {
             WavReader(wav).use { reader ->
@@ -161,8 +162,7 @@ class Transcriber(
 
                     val chunkStartMs = offsetMs
                     if (!Chunker.isSilent(samples)) {
-                        val prompt = listOf(rec.course.takeIf { it.isNotBlank() }, promptTail.takeIf { it.isNotBlank() })
-                            .filterNotNull().joinToString(". ")
+                        val prompt = WhisperPrompt.build(rec.course, glossary, promptTail) ?: ""
                         val t0 = System.currentTimeMillis()
                         var raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
                         if (isFinal && raw != null) {

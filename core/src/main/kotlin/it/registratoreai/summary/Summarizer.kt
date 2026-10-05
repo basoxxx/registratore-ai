@@ -6,6 +6,7 @@ import it.registratoreai.text.TranscriptFormatter
 import it.registratoreai.text.formatTimestamp
 import it.registratoreai.transcription.WhisperLib
 import it.registratoreai.transcription.WhisperModel
+import it.registratoreai.transcription.WhisperPrompt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -123,11 +124,15 @@ class Summarizer(private val modelPath: String, private val threads: Int) : Auto
         return parts
     }
 
-    suspend fun summarize(info: LessonInfo, segments: List<TextSegment>, onProgress: (Float) -> Unit = {}): String {
+    suspend fun summarize(
+        info: LessonInfo, segments: List<TextSegment>, glossary: String = "", onProgress: (Float) -> Unit = {},
+    ): String {
         check(load()) { "Impossibile caricare il modello per il riassunto" }
         val parts = split(segments)
         require(parts.isNotEmpty()) { "La trascrizione è vuota" }
         val topic = listOf(info.course, info.title).filter { it.isNotBlank() }.joinToString(" – ")
+        val terms = WhisperPrompt.normalizeGlossary(glossary)
+            .let { if (it.isBlank()) "" else "Termini del corso, da scrivere esattamente così: $it.\n" }
         val steps = parts.size + 1
         var done = 0
 
@@ -137,6 +142,7 @@ class Summarizer(private val modelPath: String, private val threads: Int) : Auto
                 "Questa è una parte della trascrizione automatica di una lezione universitaria" +
                     (if (topic.isNotBlank()) " ($topic)" else "") +
                     ". La trascrizione può contenere errori di riconoscimento: correggili solo se il significato è evidente.\n" +
+                    terms +
                     "Scrivi:\n" +
                     "- una prima riga nel formato TITOLO: <argomento di questa parte, massimo 8 parole>\n" +
                     "- poi da 3 a 7 punti elenco (che iniziano con \"- \") con concetti, definizioni, teoremi ed esempi spiegati.\n" +

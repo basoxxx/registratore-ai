@@ -19,6 +19,8 @@ import it.registratoreai.transcription.canonicalModelId
 import it.registratoreai.transcription.SpeechPacker
 import it.registratoreai.transcription.WhisperVad
 import it.registratoreai.transcription.SpeedStore
+import it.registratoreai.transcription.GlossaryStore
+import it.registratoreai.transcription.WhisperPrompt
 import it.registratoreai.transcription.ModelStore
 import it.registratoreai.transcription.TextCleaner
 import it.registratoreai.transcription.WhisperEngine
@@ -75,6 +77,8 @@ class DesktopApp {
     /** Velocità di trascrizione misurata (ms di audio per ms di calcolo), per i tempi stimati. */
     val speed = MutableStateFlow<Float?>(null)
     private val speeds = SpeedStore(File(Paths.dataDir, "speed.properties"))
+    /** Parole chiave di ogni corso, usate come contesto da Whisper. */
+    val glossaries = GlossaryStore(File(Paths.dataDir, "glossary.properties"))
     private var eta = EtaEstimator()
     private var vadInstance: WhisperVad? = null
 
@@ -295,7 +299,7 @@ class DesktopApp {
         backupEngine.release()
         try {
             Summarizer(path, _settings.value.threads).use { s ->
-                val text = s.summarize(l.info(), l.segments) { p -> summaryProgress.value = id to p }
+                val text = s.summarize(l.info(), l.segments, glossaries.get(l.course)) { p -> summaryProgress.value = id to p }
                 mutate(id) { it.copy(summary = text, summaryStatus = TxStatus.DONE) }
             }
         } catch (e: CancellationException) {
@@ -440,7 +444,7 @@ class DesktopApp {
                 val samples = window.samples
                 val chunkStart = offsetMs
                 if (!Chunker.isSilent(samples)) {
-                    val prompt = listOf(lesson.course, promptTail).filter { it.isNotBlank() }.joinToString(". ")
+                    val prompt = WhisperPrompt.build(lesson.course, glossaries.get(lesson.course), promptTail) ?: ""
                     val t0 = System.currentTimeMillis()
                     var raw = engine.transcribe(samples, s.language, prompt.ifBlank { null }, s.threads, beam)
                     if (isFinal && raw != null) {

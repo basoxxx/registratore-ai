@@ -46,3 +46,16 @@ class EtaTest {
         org.junit.Assert.assertEquals("~1 h 20 min", it.registratoreai.transcription.formatEta(80 * 60_000L))
     }
 }
+
+class PromptTest {
+    @org.junit.Test
+    fun promptCombinesCourseGlossaryAndTail() {
+        val p = it.registratoreai.transcription.WhisperPrompt
+        org.junit.Assert.assertEquals("Statistica. Bayes, eteroschedasticità, OLS. abbiamo visto",
+            p.build(" Statistica ", "Bayes,\n eteroschedasticità; OLS., bayes", "abbiamo visto "))
+        org.junit.Assert.assertNull(p.build("", " , ", ""))
+        org.junit.Assert.assertEquals("analisi matematica 1", p.courseKey("  Analisi   Matematica 1 "))
+        val long = (1..200).joinToString(",") { "termine$it" }
+        org.junit.Assert.assertTrue(p.normalizeGlossary(long).length <= p.GLOSSARY_CHARS)
+    }
+}

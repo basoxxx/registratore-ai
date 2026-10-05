@@ -202,7 +202,7 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
                                 Toast.makeText(ctx, "Testo copiato", Toast.LENGTH_SHORT).show()
                             }
                         })
-                        DropdownMenuItem(text = { Text("Rinomina") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { menu = false; renaming = true })
+                        DropdownMenuItem(text = { Text("Modifica") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { menu = false; renaming = true })
                         DropdownMenuItem(text = { Text("Elimina") }, leadingIcon = { Icon(Icons.Default.Delete, null) }, onClick = { menu = false; deleting = true })
                     }
                 },
@@ -290,18 +290,21 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
     if (renaming && r != null) {
         var title by remember { mutableStateOf(r.title) }
         var course by remember { mutableStateOf(r.course) }
+        var glossary by remember(course) { mutableStateOf(app.settings.glossary(course)) }
         AlertDialog(
             onDismissRequest = { renaming = false },
-            title = { Text("Rinomina") },
+            title = { Text("Modifica") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(title, { title = it }, label = { Text("Titolo") }, singleLine = true)
                     OutlinedTextField(course, { course = it }, label = { Text("Corso") }, singleLine = true)
+                    GlossaryField(glossary, enabled = course.isNotBlank()) { glossary = it }
                 }
             },
             confirmButton = {
                 Button(onClick = {
                     renaming = false
+                    app.settings.setGlossary(course, glossary)
                     scope.launch { dao.rename(id, title.ifBlank { r.title }, course.trim()); app.exporter.autoExport(id) }
                 }) { Text("Salva") }
             },
@@ -453,4 +456,15 @@ private fun SummaryCard(rec: Recording, onSummarize: () -> Unit) {
             }
         }
     }
+}
+
+/** Parole chiave del corso: Whisper le usa come contesto e le scrive correttamente. */
+@Composable
+fun GlossaryField(value: String, enabled: Boolean = true, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value, onChange, enabled = enabled, minLines = 2, maxLines = 4,
+        label = { Text("Parole chiave del corso") },
+        placeholder = { Text("es. teorema di Bayes, eteroschedasticità, Keynes") },
+        supportingText = { Text(if (enabled) "Termini tecnici e nomi separati da virgole: verranno trascritti correttamente" else "Indica prima il corso") },
+    )
 }

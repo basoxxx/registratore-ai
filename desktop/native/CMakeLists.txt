@@ -63,9 +63,9 @@ add_subdirectory(${REPO_ROOT}/third_party/llama.cpp llama_build)
 
 # Decodifica di mp3/m4a/mp4/… : AVFoundation su macOS, Media Foundation su Windows
 if (APPLE)
-    enable_language(OBJCXX)
+    # compilato come C++ in modalità Objective-C++ (enable_language(OBJCXX) qui non funziona)
     set(AUDIO_DECODE ${REPO_ROOT}/app/src/main/cpp/audio_decode_mac.mm)
-    set_source_files_properties(${AUDIO_DECODE} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    set_source_files_properties(${AUDIO_DECODE} PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++ -fobjc-arc")
 else ()
     set(AUDIO_DECODE ${REPO_ROOT}/app/src/main/cpp/audio_decode.cpp)
 endif ()

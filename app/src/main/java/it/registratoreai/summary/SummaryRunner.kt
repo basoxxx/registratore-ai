@@ -38,7 +38,7 @@ class SummaryRunner(private val app: RegistratoreApp) {
                     rec.title, rec.course, rec.createdAt, rec.durationMs,
                     if (rec.modelId.isNotBlank()) modelById(rec.modelId).name else "",
                 )
-                val text = s.summarize(info, segments) { p -> ServiceState.summary.value = id to p }
+                val text = s.summarize(info, segments, app.settings.glossary(info.course)) { p -> ServiceState.summary.value = id to p }
                 dao.setSummary(id, text, SummaryState.DONE)
             }
             app.exporter.autoExport(id)
