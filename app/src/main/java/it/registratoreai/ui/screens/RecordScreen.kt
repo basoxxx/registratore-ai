@@ -1,5 +1,27 @@
 package it.registratoreai.ui.screens
 
+import it.registratoreai.ui.theme.SoftCard
+import it.registratoreai.ui.theme.RecordGradient
+import it.registratoreai.ui.theme.PulsingDot
+import it.registratoreai.ui.theme.MonoLabel
+import it.registratoreai.ui.theme.LevelBars
+import it.registratoreai.ui.theme.GradientBox
+import it.registratoreai.ui.theme.CourseTag
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -86,106 +108,127 @@ fun RecordScreen(onBack: () -> Unit, onFinished: (Long) -> Unit) {
         if (segments.isNotEmpty()) listState.animateScrollToItem(segments.size - 1)
     }
 
+    val cs = MaterialTheme.colorScheme
+    val levels = remember(id) { mutableStateListOf<Float>().apply { repeat(48) { add(0f) } } }
+    LaunchedEffect(live?.elapsedMs?.div(100), live?.paused) {
+        levels.removeAt(0)
+        levels.add(if (live?.paused != false) 0f else live!!.level)
+    }
+
     Scaffold(
+        containerColor = cs.background,
         topBar = {
             TopAppBar(
-                title = { Text(rec?.title ?: "Registrazione") },
+                title = { Text(rec?.title ?: "Registrazione", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro") } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.background),
             )
         },
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(16.dp),
+            Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            rec?.course?.takeIf { it.isNotBlank() }?.let {
-                Text(it, color = MaterialTheme.colorScheme.primary)
+            rec?.course?.takeIf { it.isNotBlank() }?.let { CourseTag(it) }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    live == null -> {}
+                    live!!.paused -> Icon(Icons.Default.Pause, null, Modifier.size(14.dp), tint = cs.onSurfaceVariant)
+                    else -> PulsingDot(cs.error)
+                }
+                Text(
+                    when {
+                        live == null -> "Salvataggio…"
+                        live!!.paused -> "In pausa"
+                        else -> "Registrazione in corso"
+                    },
+                    Modifier.padding(start = 8.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (live?.paused == false) cs.error else cs.onSurfaceVariant,
+                )
             }
             Text(
                 formatDuration(live?.elapsedMs ?: rec?.durationMs ?: 0),
-                fontSize = 56.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light,
+                fontSize = 60.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Light,
             )
-            Text(
-                when {
-                    live == null -> "Salvataggio…"
-                    live!!.paused -> "In pausa"
-                    else -> "● Registrazione in corso"
-                },
-                color = if (live?.paused == false) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            LinearProgressIndicator(
-                progress = { (live?.level ?: 0f).let { Math.sqrt(it.toDouble()).toFloat() } },
-                modifier = Modifier.fillMaxWidth(0.7f).height(8.dp),
-            )
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilledTonalIconButton(
-                    onClick = {
-                        CaptureService.send(ctx, if (live?.paused == true) CaptureService.ACTION_RESUME else CaptureService.ACTION_PAUSE)
-                    },
-                    enabled = live != null,
-                    modifier = Modifier.size(64.dp),
+            LevelBars(levels, Modifier.fillMaxWidth(0.9f).height(56.dp), color = if (live?.paused == false) cs.error else cs.outline)
+            Spacer(Modifier.height(22.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
+                RoundButton(
+                    if (live?.paused == true) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    if (live?.paused == true) "Riprendi" else "Pausa", enabled = live != null,
                 ) {
-                    Icon(if (live?.paused == true) Icons.Default.PlayArrow else Icons.Default.Pause, "Pausa", Modifier.size(32.dp))
+                    CaptureService.send(ctx, if (live?.paused == true) CaptureService.ACTION_RESUME else CaptureService.ACTION_PAUSE)
                 }
-                FilledIconButton(
-                    onClick = { CaptureService.send(ctx, CaptureService.ACTION_STOP) },
-                    enabled = live != null,
-                    modifier = Modifier.size(80.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.error),
+                GradientBox(
+                    RecordGradient,
+                    Modifier.size(88.dp).clickable(enabled = live != null) { CaptureService.send(ctx, CaptureService.ACTION_STOP) },
+                    CircleShape,
                 ) {
-                    Icon(Icons.Default.Stop, "Stop", Modifier.size(40.dp))
+                    Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(Color.White).align(Alignment.Center))
                 }
-                FilledTonalIconButton(
-                    onClick = { CaptureService.send(ctx, CaptureService.ACTION_BOOKMARK) },
-                    enabled = live != null && !live!!.paused,
-                    modifier = Modifier.size(64.dp),
-                ) {
-                    Icon(Icons.Default.Star, "Segna questo momento", Modifier.size(32.dp))
+                RoundButton(Icons.Default.Star, "Segna questo momento", enabled = live != null && !live!!.paused, tint = cs.tertiary) {
+                    CaptureService.send(ctx, CaptureService.ACTION_BOOKMARK)
                 }
             }
             val marks = Bookmarks.parse(rec?.bookmarks).size
-            Text(
-                if (marks == 0) "⭐ segna un momento importante (gli ultimi 10 secondi)"
-                else "⭐ $marks moment${if (marks == 1) "o segnato" else "i segnati"}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            Spacer(Modifier.height(12.dp))
+            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
+                Text("Pausa", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Text("Stop e salva", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                Text(if (marks == 0) "Segna" else "⭐ $marks", style = MaterialTheme.typography.labelSmall,
+                    color = if (marks == 0) cs.onSurfaceVariant else cs.tertiary)
+            }
+            Spacer(Modifier.height(18.dp))
 
             val liveTx = tx?.takeIf { it.recordingId == id }
-            Text(
-                when {
-                    settings.modelId !in installed -> "Nessun modello scaricato: potrai trascrivere dopo dalle Impostazioni."
-                    liveTx != null -> "Trascrizione in tempo reale · aggiornata a ${formatTimestamp(liveTx.processedMs)}" +
-                        (liveTx.etaMs?.takeIf { liveTx.totalMs - liveTx.processedMs > 60_000 }
-                            ?.let { " · in ritardo, recupero in ${formatEta(it)}" } ?: "")
-                    settings.liveTranscription -> "La trascrizione comparirà qui ogni ~30 secondi"
-                    settings.autoTranscribe -> "La trascrizione partirà al termine della registrazione"
-                    else -> "Trascrizione automatica disattivata"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            Card(Modifier.fillMaxWidth().weight(1f)) {
-                if (segments.isEmpty()) {
+            SoftCard(Modifier.fillMaxWidth().weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.AutoAwesome, null, Modifier.size(16.dp), tint = cs.primary)
                     Text(
-                        "La registrazione continua anche a schermo spento o se chiudi l'app.",
-                        Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium,
+                        when {
+                            settings.modelId !in installed -> "Nessun modello scaricato: potrai trascrivere dopo"
+                            liveTx != null -> "In tempo reale · aggiornata a ${formatTimestamp(liveTx.processedMs)}" +
+                                (liveTx.etaMs?.takeIf { liveTx.totalMs - liveTx.processedMs > 60_000 }
+                                    ?.let { " · recupero in ${formatEta(it)}" } ?: "")
+                            settings.liveTranscription -> "La trascrizione comparirà qui ogni ~30 secondi"
+                            settings.autoTranscribe -> "La trascrizione partirà al termine"
+                            else -> "Trascrizione automatica disattivata"
+                        },
+                        Modifier.padding(start = 6.dp),
+                        style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant,
                     )
                 }
-                LazyColumn(state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (segments.isEmpty()) {
+                    Text(
+                        "La registrazione continua anche a schermo spento o se chiudi l'app. " +
+                            "Premi ⭐ quando il docente dice qualcosa di importante.",
+                        Modifier.padding(top = 12.dp), style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
+                    )
+                }
+                LazyColumn(state = listState, contentPadding = PaddingValues(top = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(segments, key = { it.id }) { s ->
-                        Column {
-                            Text(formatTimestamp(s.startMs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Row {
+                            Text(formatTimestamp(s.startMs), Modifier.width(72.dp).padding(top = 3.dp), style = MonoLabel, color = cs.primary)
                             Text(s.text, style = MaterialTheme.typography.bodyLarge)
                         }
                     }
                 }
             }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun RoundButton(icon: ImageVector, label: String, enabled: Boolean, tint: Color = MaterialTheme.colorScheme.onSurface, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick, enabled = enabled, shape = CircleShape, modifier = Modifier.size(64.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shadowElevation = 2.dp,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(icon, label, Modifier.size(28.dp), tint = if (enabled) tint else tint.copy(alpha = 0.35f))
         }
     }
 }

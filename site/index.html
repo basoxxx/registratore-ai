@@ -80,6 +80,10 @@ h1 span{color:var(--primary)}
 @keyframes blink{50%{opacity:0}}
 @media (prefers-reduced-motion:reduce){.ph-meter i,.ph-tx .typing::after{animation:none}}
 section{padding:56px 0}
+.shots{display:grid;grid-template-columns:2.2fr 1fr 1fr;gap:16px;align-items:start}
+.shots img{width:100%;height:auto;border-radius:18px;border:1px solid var(--border);box-shadow:0 12px 40px rgba(30,27,75,.12);display:block}
+.shots figure{margin:0}.shots figcaption{color:var(--muted);font-size:.9rem;margin-top:8px;text-align:center}
+@media (max-width:760px){.shots{grid-template-columns:1fr 1fr}.shots figure:first-child{grid-column:1/-1}}
 h2{font-size:clamp(1.6rem,3.5vw,2.2rem);margin:0 0 8px;letter-spacing:-.01em}
 .sub{color:var(--muted);margin:0 0 28px;max-width:640px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
@@ -158,6 +162,16 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between}
       </div>
     </div>
   </div>
+
+  <section id="schermate">
+    <h2>Com'è fatta</h2>
+    <p class="sub">Schermate reali dell'app: lezioni colorate per corso, trascrizione, riassunto e momenti segnati.</p>
+    <div class="shots">
+      <figure><img src="img/desktop.webp" alt="Versione per computer: lezione con trascrizione" loading="lazy" width="1400" height="900"><figcaption>Mac e Windows</figcaption></figure>
+      <figure><img src="img/android-home.webp" alt="Android: elenco delle lezioni" loading="lazy" width="600" height="1290"><figcaption>Android · lezioni</figcaption></figure>
+      <figure><img src="img/android-summary.webp" alt="Android: riassunto della lezione" loading="lazy" width="600" height="1290"><figcaption>Android · riassunto</figcaption></figure>
+    </div>
+  </section>
 
   <section id="funzioni">
     <h2>Tutto quello che serve a lezione</h2>

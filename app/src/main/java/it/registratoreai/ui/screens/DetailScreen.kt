@@ -1,5 +1,41 @@
 package it.registratoreai.ui.screens
 
+import it.registratoreai.ui.theme.SoftCard
+import it.registratoreai.ui.theme.RoundProgress
+import it.registratoreai.ui.theme.Pill
+import it.registratoreai.ui.theme.MonoLabel
+import it.registratoreai.ui.theme.IndeterminateProgress
+import it.registratoreai.ui.theme.IconBadge
+import it.registratoreai.ui.theme.GradientBox
+import it.registratoreai.ui.theme.CourseTag
+import it.registratoreai.ui.theme.BrandGradient
+import it.registratoreai.text.TextSegment
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.TabRowDefaults
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.Surface
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.ExperimentalFoundationApi
 import it.registratoreai.text.Bookmarks
 import androidx.compose.material3.InputChip
 import androidx.compose.material.icons.filled.Close
@@ -96,7 +132,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun DetailScreen(id: Long, onBack: () -> Unit) {
     val ctx = LocalContext.current
@@ -171,13 +207,18 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
     }
 
     val r = rec
+    var tab by remember(id) { mutableIntStateOf(0) }
+    val listState = rememberLazyListState()
+    val cs = MaterialTheme.colorScheme
     Scaffold(
+        containerColor = cs.background,
         topBar = {
             TopAppBar(
-                title = { Text(r?.title ?: "", maxLines = 1) },
+                title = {},
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.background),
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro") } },
                 actions = {
-                    IconButton(onClick = { searching = !searching; if (!searching) query = "" }) { Icon(Icons.Default.Search, "Cerca") }
+                    IconButton(onClick = { searching = !searching; if (!searching) query = ""; tab = 0 }) { Icon(Icons.Default.Search, "Cerca") }
                     IconButton(onClick = { share(ExportFormat.MARKDOWN) }) { Icon(Icons.Default.Share, "Condividi") }
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Altro") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -215,113 +256,166 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
                 },
             )
         },
+        bottomBar = {
+            // ---- Player sempre a portata di mano
+            if (player != null) {
+                Surface(color = cs.surface, shadowElevation = 8.dp, tonalElevation = 0.dp) {
+                    Row(
+                        Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        GradientBox(BrandGradient, Modifier.size(48.dp).clickable {
+                            val p = player ?: return@clickable
+                            if (p.isPlaying) { p.pause(); playing = false } else { p.start(); playing = true }
+                        }, CircleShape) {
+                            Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Riproduci",
+                                Modifier.align(Alignment.Center), tint = Color.White)
+                        }
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Slider(
+                                value = if (seeking >= 0) seeking else position.toFloat(),
+                                onValueChange = { seeking = it },
+                                onValueChangeFinished = { player?.seekTo(seeking.toInt()); position = seeking.toInt(); seeking = -1f },
+                                valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                                modifier = Modifier.height(28.dp),
+                            )
+                            Row {
+                                Text(formatDuration(position.toLong()), style = MonoLabel, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+                                Text(formatDuration(duration.toLong()), style = MonoLabel, color = cs.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+        },
     ) { padding ->
         if (r == null) return@Scaffold
-        val listState = rememberLazyListState()
         val visible = segments.filter { query.isBlank() || it.text.contains(query, ignoreCase = true) }
         val currentIdx = if (playing || position > 0) visible.indexOfLast { it.startMs <= position } else -1
         val marks = Bookmarks.parse(r.bookmarks)
         val starred = marks.mapNotNull { ms -> segments.lastOrNull { it.startMs <= ms } ?: segments.firstOrNull() }.map { it.id }.toSet()
+        val summaryBusy = ServiceState.summary.collectAsState().value?.first == id
+        // indici fissi della lista: intestazione, stato, schede
+        val headerItems = 3
 
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                Text(formatDate(r.createdAt), style = MaterialTheme.typography.bodySmall)
-                if (r.course.isNotBlank()) Text(r.course, color = MaterialTheme.colorScheme.primary)
-
-                // ---- Player
-                if (player != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = {
-                            val p = player ?: return@IconButton
-                            if (p.isPlaying) { p.pause(); playing = false } else { p.start(); playing = true }
-                        }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Riproduci") }
-                        Slider(
-                            value = if (seeking >= 0) seeking else position.toFloat(),
-                            onValueChange = { seeking = it },
-                            onValueChangeFinished = { player?.seekTo(seeking.toInt()); position = seeking.toInt(); seeking = -1f },
-                            valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("${formatDuration(position.toLong())} / ${formatDuration(duration.toLong())}", style = MaterialTheme.typography.labelSmall)
-                    }
-                } else if (recording) {
-                    Text("Registrazione in corso…", color = MaterialTheme.colorScheme.error)
+        LazyColumn(
+            state = listState, modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
+            item {
+                Column(Modifier.padding(horizontal = 20.dp)) {
+                    CourseTag(r.course)
+                    Text(r.title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 8.dp))
+                    FlowRowMeta(r, marks.size)
                 }
-
-                // ---- Stato trascrizione
-                TranscriptionPanel(r, tx?.takeIf { it.recordingId == id }, id in queue, settings.modelId in installed,
-                    onTranscribe = { restart ->
-                        // "Ritrascrivi" usa il modello finale e sostituisce il testo man mano, senza cancellarlo
-                        CaptureService.send(ctx, if (restart) CaptureService.ACTION_REFINE else CaptureService.ACTION_TRANSCRIBE, id)
-                    },
-                    onCancel = { CaptureService.send(ctx, CaptureService.ACTION_CANCEL_TX, id) },
-                )
-
-                SummaryCard(r, onSummarize = { CaptureService.send(ctx, CaptureService.ACTION_SUMMARIZE, id) })
-
-                // ---- Momenti segnati con ⭐ durante la registrazione
-                if (marks.isNotEmpty()) {
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+            }
+            item {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    TranscriptionPanel(r, tx?.takeIf { it.recordingId == id }, id in queue, settings.modelId in installed,
+                        onTranscribe = { restart ->
+                            // "Ritrascrivi" usa il modello finale e sostituisce il testo man mano, senza cancellarlo
+                            CaptureService.send(ctx, if (restart) CaptureService.ACTION_REFINE else CaptureService.ACTION_TRANSCRIBE, id)
+                        },
+                        onCancel = { CaptureService.send(ctx, CaptureService.ACTION_CANCEL_TX, id) },
+                    )
+                }
+            }
+            stickyHeader {
+                Column(Modifier.background(cs.background)) {
+                    TabRow(
+                        tab, containerColor = cs.background,
+                        divider = { HorizontalDivider(color = cs.outlineVariant) },
+                        indicator = { pos ->
+                            TabRowDefaults.PrimaryIndicator(Modifier.tabIndicatorOffset(pos[tab]), width = 40.dp,
+                                shape = RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                        },
                     ) {
-                        Icon(Icons.Default.Star, null, tint = MaterialTheme.colorScheme.tertiary)
-                        marks.forEach { ms ->
-                            InputChip(
-                                selected = false,
-                                onClick = {
-                                    seekTo(ms)
-                                    val idx = visible.indexOfLast { it.startMs <= ms }
-                                    if (idx >= 0) scope.launch { listState.animateScrollToItem(idx) }
-                                },
-                                label = { Text(formatTimestamp(ms)) },
-                                trailingIcon = {
-                                    Icon(
-                                        Icons.Default.Close, "Togli", Modifier.size(16.dp).clickable {
-                                            scope.launch { dao.setBookmarks(id, Bookmarks.format(marks - ms)) }
-                                        },
-                                    )
-                                },
+                        listOf("Testo", "Riassunto", "Momenti").forEachIndexed { i, label ->
+                            val badge = when (i) {
+                                1 -> if (summaryBusy) "…" else if (r.summary != null) "✓" else null
+                                2 -> marks.size.takeIf { it > 0 }?.toString()
+                                else -> null
+                            }
+                            Tab(tab == i, onClick = { tab = i }, text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(label, style = MaterialTheme.typography.labelLarge)
+                                    badge?.let { Pill(it, cs.primary, Modifier.padding(start = 4.dp)) }
+                                }
+                            })
+                        }
+                    }
+                    if (tab == 0 && searching) {
+                        SearchField(query, "Cerca nella trascrizione", Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { query = it }
+                        if (query.isNotBlank()) Text("${visible.size} risultati", Modifier.padding(start = 32.dp, bottom = 4.dp),
+                            style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+                    }
+                }
+            }
+            when (tab) {
+                0 -> {
+                    if (segments.isEmpty()) item {
+                        Text(
+                            if (r.transcription == TxState.DONE) "Nessun parlato riconosciuto in questa registrazione."
+                            else "La trascrizione comparirà qui.",
+                            Modifier.padding(20.dp), color = cs.onSurfaceVariant,
+                        )
+                    }
+                    items(visible.size, key = { visible[it].id }) { i ->
+                        val s = visible[i]
+                        val active = i == currentIdx
+                        val star = s.id in starred
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp)
+                                .clip(MaterialTheme.shapes.medium)
+                                .background(
+                                    when {
+                                        active -> cs.primaryContainer
+                                        star -> cs.tertiaryContainer.copy(alpha = 0.6f)
+                                        else -> Color.Transparent
+                                    }
+                                )
+                                .clickable { seekTo(s.startMs) }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                        ) {
+                            Column(Modifier.width(64.dp).padding(top = 3.dp)) {
+                                Text(formatTimestamp(s.startMs).removePrefix("00:"), style = MonoLabel, color = cs.primary)
+                                if (star) Text("⭐", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Text(
+                                highlight(s.text, query, cs.tertiaryContainer),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (s.pass >= Pass.FINAL) cs.onSurface else cs.onSurface.copy(alpha = 0.75f),
                             )
                         }
                     }
                 }
-
-                if (searching) {
-                    OutlinedTextField(
-                        query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
-                        placeholder = { Text("Cerca nella trascrizione") },
-                        supportingText = { if (query.isNotBlank()) Text("${visible.size} risultati") },
-                    )
-                }
-            }
-
-            LazyColumn(
-                state = listState, modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                if (segments.isEmpty() && r.transcription == TxState.DONE) {
-                    item { Text("Nessun parlato riconosciuto in questa registrazione.") }
-                }
-                items(visible.size, key = { visible[it].id }) { i ->
-                    val s = visible[i]
-                    val active = i == currentIdx
-                    Column(
-                        Modifier.fillMaxWidth()
-                            .background(
-                                if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                                RoundedCornerShape(8.dp),
-                            )
-                            .clickable { seekTo(s.startMs) }
-                            .padding(8.dp)
-                    ) {
-                        Text(
-                            (if (s.id in starred) "⭐ " else "") + formatTimestamp(s.startMs),
-                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(s.text, style = MaterialTheme.typography.bodyLarge)
+                1 -> item { SummaryTab(r, onSummarize = { CaptureService.send(ctx, CaptureService.ACTION_SUMMARIZE, id) }) }
+                else -> {
+                    if (marks.isEmpty()) item {
+                        EmptyCard(Icons.Default.Star, cs.tertiary, "Nessun momento segnato",
+                            "Durante la registrazione premi ⭐ (anche dalla notifica) quando il docente dice qualcosa di importante: " +
+                                "il passaggio resta evidenziato qui, nel Markdown e nel riassunto.")
+                    }
+                    val excerpts = Bookmarks.excerpts(segments.map { TextSegment(it.startMs, it.endMs, it.text) }, marks, words = 40).toMap()
+                    items(marks, key = { "m$it" }) { ms ->
+                        SoftCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp).clip(MaterialTheme.shapes.large).clickable {
+                            tab = 0; query = ""; searching = false
+                            seekTo(ms)
+                            val idx = segments.indexOfLast { it.startMs <= ms }.coerceAtLeast(0)
+                            scope.launch { listState.animateScrollToItem(headerItems + idx) }
+                        }) {
+                            Row(verticalAlignment = Alignment.Top) {
+                                IconBadge(cs.tertiary, size = 34) { Icon(Icons.Default.Star, null, Modifier.size(18.dp), tint = cs.tertiary) }
+                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                    Text(formatTimestamp(ms), style = MonoLabel, color = cs.primary)
+                                    Text(excerpts[ms] ?: "La trascrizione di questo punto non è ancora pronta.",
+                                        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                                }
+                                IconButton(onClick = { scope.launch { dao.setBookmarks(id, Bookmarks.format(marks - ms)) } }) {
+                                    Icon(Icons.Default.Close, "Togli", tint = cs.onSurfaceVariant)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -376,6 +470,46 @@ fun DetailScreen(id: Long, onBack: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FlowRowMeta(r: Recording, marks: Int) {
+    FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Meta(Icons.Default.Schedule, formatDate(r.createdAt))
+        Meta(Icons.Default.GraphicEq, formatDuration(r.durationMs))
+        if (marks > 0) Meta(Icons.Default.Star, "$marks momenti")
+    }
+}
+
+@Composable
+private fun Meta(icon: ImageVector, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text, Modifier.padding(start = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private fun highlight(text: String, query: String, color: Color): AnnotatedString = buildAnnotatedString {
+    if (query.isBlank()) { append(text); return@buildAnnotatedString }
+    var i = 0
+    while (i < text.length) {
+        val j = text.indexOf(query, i, ignoreCase = true)
+        if (j < 0) { append(text.substring(i)); break }
+        append(text.substring(i, j))
+        withStyle(SpanStyle(background = color, fontWeight = FontWeight.SemiBold)) { append(text.substring(j, j + query.length)) }
+        i = j + query.length
+    }
+}
+
+@Composable
+private fun EmptyCard(icon: ImageVector, color: Color, title: String, text: String) {
+    SoftCard(Modifier.fillMaxWidth().padding(16.dp)) {
+        IconBadge(color) { Icon(icon, null, tint = color) }
+        Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
 @Composable
 private fun TranscriptionPanel(
     rec: Recording,
@@ -391,109 +525,109 @@ private fun TranscriptionPanel(
     val speed = liveSpeed ?: app.transcriber.speedFor(settings.modelId)
     val installedModels by app.models.installed.collectAsState()
     val finalReady = settings.finalModelId in installedModels
-    Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Column(Modifier.padding(12.dp)) {
+    val cs = MaterialTheme.colorScheme
+    val isQueued = queued || rec.transcription == TxState.QUEUED
+    val canImprove = rec.transcription == TxState.DONE && rec.pass != Pass.FINAL && finalReady &&
+        canonicalModelId(rec.modelId) != canonicalModelId(settings.finalModelId)
+
+    data class S(val icon: ImageVector, val color: Color, val title: String, val sub: String?)
+    val s = when {
+        rec.state != RecState.DONE -> S(Icons.Default.Mic, cs.error, "Registrazione in corso", "Il testo si aggiorna automaticamente")
+        tx != null -> S(Icons.Default.AutoAwesome, cs.primary,
+            (if (rec.pass == Pass.FINAL) "Trascrizione finale" else "Trascrizione") + " · ${(tx.fraction * 100).toInt()}%",
+            (tx.etaMs?.let { "Fine tra ${formatEta(it)}" } ?: "Calcolo del tempo rimanente…") +
+                if (rec.pass == Pass.FINAL) " · il testo migliora man mano" else " · continua in background")
+        isQueued -> S(Icons.Default.HourglassTop, cs.secondary, "In coda per la trascrizione",
+            speed?.let { "Durata stimata ${formatEta(((rec.durationMs - rec.transcribedUntilMs) / it).toLong())}" })
+        rec.transcription == TxState.RUNNING -> S(Icons.Default.HourglassTop, cs.secondary, "In attesa di ripresa", null)
+        !modelReady && rec.transcription != TxState.DONE -> S(Icons.Default.Download, cs.onSurfaceVariant, "Nessun modello scaricato",
+            "Scarica un modello dalle Impostazioni per trascrivere")
+        canImprove -> S(Icons.Default.AutoAwesome, cs.secondary, "Anteprima con Whisper ${modelById(rec.modelId).name}",
+            "La trascrizione finale è molto più precisa")
+        rec.transcription == TxState.DONE -> S(Icons.Default.CheckCircle, Success, "Trascritta con ${modelById(rec.modelId).name}", null)
+        rec.transcription == TxState.ERROR -> S(Icons.Default.Close, cs.error, "Trascrizione non riuscita", rec.errorMessage)
+        rec.transcribedUntilMs > 0 -> S(Icons.Default.Pause, cs.tertiary, "Interrotta a ${formatTimestamp(rec.transcribedUntilMs)}", null)
+        else -> S(Icons.Default.AutoAwesome, cs.onSurfaceVariant, "Non ancora trascritta", null)
+    }
+    SoftCard(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(s.color, size = 38) { Icon(s.icon, null, Modifier.size(20.dp), tint = s.color) }
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(s.title, style = MaterialTheme.typography.titleSmall)
+                s.sub?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant) }
+            }
             when {
-                rec.state != RecState.DONE -> Text("La trascrizione viene aggiornata automaticamente durante la registrazione.")
-                // In coda: stima basata sulla velocità misurata in precedenza
-                (queued || rec.transcription == TxState.QUEUED) && speed != null -> {
-                    Text("In coda per la trascrizione · durata stimata ${formatEta(((rec.durationMs - rec.transcribedUntilMs) / speed).toLong())}")
-                    TextButton(onClick = onCancel) { Text("Annulla") }
-                }
-                tx != null -> {
-                    Text(
-                        if (rec.pass == Pass.FINAL) "Trascrizione finale con ${modelById(rec.modelId).name}… ${(tx.fraction * 100).toInt()}%"
-                        else "Trascrizione in corso… ${(tx.fraction * 100).toInt()}%",
-                        fontWeight = FontWeight.Medium,
-                    )
-                    if (rec.pass == Pass.FINAL) Text(
-                        "Il testo qui sotto migliora man mano che avanza.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        tx.etaMs?.let { "Fine stimata tra ${formatEta(it)}" } ?: "Calcolo del tempo rimanente…",
-                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(progress = { tx.fraction }, Modifier.fillMaxWidth())
-                    Text(
-                        "Il testo compare qui sotto man mano. Puoi uscire dall'app: continua in background.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    TextButton(onClick = onCancel) { Text("Interrompi") }
-                }
-                queued || rec.transcription == TxState.QUEUED || rec.transcription == TxState.RUNNING -> {
-                    Text("In coda per la trascrizione")
-                    TextButton(onClick = onCancel) { Text("Annulla") }
-                }
-                !modelReady -> Text("Scarica un modello di trascrizione dalle Impostazioni per trascrivere questa lezione.")
-                rec.transcription == TxState.DONE && rec.pass != Pass.FINAL && finalReady &&
-                    canonicalModelId(rec.modelId) != canonicalModelId(settings.finalModelId) -> Column {
-                    Text("Anteprima con Whisper ${modelById(rec.modelId).name}", style = MaterialTheme.typography.bodyMedium)
-                    Button(onClick = { onTranscribe(true) }) { Text("Migliora con ${modelById(settings.finalModelId).name}") }
-                }
-                rec.transcription == TxState.DONE -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Trascritta con Whisper ${modelById(rec.modelId).name}",
-                        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = { onTranscribe(true) }) { Text("Ritrascrivi") }
-                }
-                else -> {
-                    if (rec.transcription == TxState.ERROR) {
-                        Text("Errore: ${rec.errorMessage ?: "sconosciuto"}", color = MaterialTheme.colorScheme.error)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (rec.transcribedUntilMs > 0) {
-                            Button(onClick = { onTranscribe(false) }) { Text("Riprendi da ${formatTimestamp(rec.transcribedUntilMs)}") }
-                            OutlinedButton(onClick = { onTranscribe(true) }) { Text("Da capo") }
-                        } else {
-                            Button(onClick = { onTranscribe(false) }) { Text("Trascrivi ora") }
-                        }
-                    }
-                }
+                rec.state != RecState.DONE -> {}
+                tx != null -> TextButton(onClick = onCancel) { Text("Stop") }
+                isQueued || rec.transcription == TxState.RUNNING -> TextButton(onClick = onCancel) { Text("Annulla") }
+                !modelReady && rec.transcription != TxState.DONE -> {}
+                canImprove -> {}
+                rec.transcription == TxState.DONE -> TextButton(onClick = { onTranscribe(true) }) { Text("Ritrascrivi") }
+                rec.transcribedUntilMs > 0 -> TextButton(onClick = { onTranscribe(false) }) { Text("Riprendi") }
+                else -> Button(onClick = { onTranscribe(false) }) { Text("Trascrivi") }
+            }
+        }
+        if (tx != null) {
+            Spacer(Modifier.height(12.dp))
+            RoundProgress(tx.fraction, color = s.color)
+        }
+        if (canImprove) {
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = { onTranscribe(true) }, Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.AutoAwesome, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp))
+                Text("Migliora con ${modelById(settings.finalModelId).name}")
             }
         }
     }
 }
 
 @Composable
-private fun SummaryCard(rec: Recording, onSummarize: () -> Unit) {
+private fun SummaryTab(rec: Recording, onSummarize: () -> Unit) {
     val app = LocalContext.current.app
     val settings by app.settings.state.collectAsState()
     val installed by app.summaryModels.installed.collectAsState()
     val running by ServiceState.summary.collectAsState()
-    var expanded by remember(rec.id) { mutableStateOf(false) }
     val progress = running?.takeIf { it.first == rec.id }?.second
     val ready = settings.summaryModelId in installed
     val canRun = rec.transcription == TxState.DONE && rec.state == RecState.DONE
-    if (rec.summary == null && !ready && progress == null) return
-    Card(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Riassunto", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                when {
-                    progress != null -> {}
-                    rec.summary != null -> TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Chiudi" else "Leggi") }
-                    rec.summaryState == SummaryState.QUEUED -> Text("In coda", style = MaterialTheme.typography.labelMedium)
-                    canRun && ready -> TextButton(onClick = onSummarize) { Text("Genera") }
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+        when {
+            progress != null -> SoftCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconBadge(cs.secondary, size = 38) { Icon(Icons.Default.Psychology, null, tint = cs.secondary) }
+                    Column(Modifier.padding(start = 12.dp)) {
+                        Text("L'IA sta leggendo la lezione… ${(progress * 100).toInt()}%", style = MaterialTheme.typography.titleSmall)
+                        Text("Offline, sul telefono", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    }
                 }
+                Spacer(Modifier.height(12.dp))
+                if (progress <= 0f) IndeterminateProgress(color = cs.secondary) else RoundProgress(progress, color = cs.secondary)
             }
-            when {
-                progress != null -> {
-                    Text("L'IA sul telefono sta leggendo la lezione… ${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
-                    LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth().padding(top = 4.dp))
-                }
-                rec.summaryState == SummaryState.ERROR -> Text("Riassunto non riuscito.", color = MaterialTheme.colorScheme.error)
-                rec.summary != null && expanded -> {
-                    MarkdownText(rec.summary, Modifier.padding(top = 4.dp))
-                    if (canRun && ready) TextButton(onClick = onSummarize) { Text("Rigenera") }
-                }
-                rec.summary != null -> Text(
-                    rec.summary.lineSequence().firstOrNull { it.isNotBlank() && !it.startsWith("#") }?.let { inline(it).text } ?: "",
-                    style = MaterialTheme.typography.bodySmall, maxLines = 3,
+            rec.summary != null -> {
+                MarkdownText(rec.summary)
+                if (canRun && ready) TextButton(onClick = onSummarize, Modifier.padding(top = 8.dp)) { Text("Rigenera il riassunto") }
+            }
+            else -> SoftCard(Modifier.fillMaxWidth()) {
+                IconBadge(cs.secondary) { Icon(Icons.Default.Psychology, null, tint = cs.secondary) }
+                Text(
+                    when {
+                        rec.summaryState == SummaryState.ERROR -> "Riassunto non riuscito"
+                        rec.summaryState == SummaryState.QUEUED -> "Riassunto in coda"
+                        !ready -> "Riassunto con IA locale"
+                        !canRun -> "Il riassunto verrà creato al termine della trascrizione"
+                        else -> "Nessun riassunto ancora"
+                    },
+                    style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp),
                 )
-                !canRun -> Text("Verrà creato al termine della trascrizione.", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    if (!ready) "Scarica il modello per il riassunto nelle Impostazioni: in breve, punti chiave, definizioni e scaletta con i minutaggi."
+                    else "In breve, punti chiave, definizioni e scaletta con i minutaggi, scritti sul telefono.",
+                    style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
+                if (canRun && ready && rec.summaryState != SummaryState.QUEUED) Button(onClick = onSummarize) {
+                    Icon(Icons.Default.AutoAwesome, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Genera riassunto")
+                }
             }
         }
     }
@@ -503,9 +637,9 @@ private fun SummaryCard(rec: Recording, onSummarize: () -> Unit) {
 @Composable
 fun GlossaryField(value: String, enabled: Boolean = true, onChange: (String) -> Unit) {
     OutlinedTextField(
-        value, onChange, enabled = enabled, minLines = 2, maxLines = 4,
+        value, onChange, enabled = enabled, minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth(),
         label = { Text("Parole chiave del corso") },
-        placeholder = { Text("es. teorema di Bayes, eteroschedasticità, Keynes") },
+        placeholder = { Text("es. sup, inf, teorema di Bolzano, Cauchy") },
         supportingText = { Text(if (enabled) "Termini tecnici e nomi separati da virgole: verranno trascritti correttamente" else "Indica prima il corso") },
     )
 }
